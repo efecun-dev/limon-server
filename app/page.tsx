@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 interface HealthData {
   status: string;
@@ -76,6 +77,7 @@ interface ServiceStatusItem {
 }
 
 export default function Home() {
+  const router = useRouter();
   const [health, setHealth] = useState<HealthData | null>(null);
   const [latency, setLatency] = useState<number | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -115,6 +117,16 @@ export default function Home() {
     }, 1000);
     return () => clearInterval(timer);
   }, []);
+
+  const handleLogout = async () => {
+    await fetch("/api/auth/logout", { method: "POST" });
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("limon_user");
+      localStorage.removeItem("limon_token");
+    }
+    router.push("/login");
+    router.refresh();
+  };
 
   const copyToClipboard = (text: string, id: string) => {
     navigator.clipboard.writeText(text);
@@ -275,12 +287,25 @@ export default function Home() {
               {isRefreshing ? "Yenileniyor..." : "Yenile"}
             </button>
             <Link
+              href="/settings"
+              className="px-3 py-1.5 rounded border border-gray-300 bg-gray-50 hover:bg-gray-100 text-gray-800 font-medium transition flex items-center gap-1.5"
+            >
+              <span>⚙️</span>
+              <span>Ayarlar</span>
+            </Link>
+            <Link
               href="/logs"
               className="px-3 py-1.5 rounded border border-gray-300 bg-gray-50 hover:bg-gray-100 text-gray-800 font-medium transition flex items-center gap-1.5"
             >
               <span>📋</span>
               <span>İstek Logları</span>
             </Link>
+            <button
+              onClick={handleLogout}
+              className="px-3 py-1.5 rounded border border-red-200 bg-red-50 hover:bg-red-100 text-red-700 font-medium transition"
+            >
+              Çıkış
+            </button>
             <a
               href="/api/health"
               target="_blank"

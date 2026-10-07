@@ -11,9 +11,7 @@ export async function OPTIONS() {
 
 export async function GET() {
   try {
-    // 1. Veritabanından şubeleri çek
     const branches = await prisma.branch.findMany({
-      where: { isActive: true },
       include: {
         _count: {
           select: { users: true },
@@ -33,7 +31,6 @@ export async function GET() {
       );
     }
 
-    // 2. Fallback: Veritabanında şube yoksa lib/branches.ts listesini dön
     const fallbackBranches = Object.entries(BRANCHES).map(([id, name]) => ({
       id,
       name,
@@ -100,6 +97,74 @@ export async function POST(req: NextRequest) {
     return withCors(
       NextResponse.json(
         { success: false, message: "Şube kaydedilemedi.", error: error.message },
+        { status: 500 }
+      )
+    );
+  }
+}
+
+export async function PATCH(req: NextRequest) {
+  try {
+    const body = await req.json();
+    const { id, name, address, phone, isActive } = body;
+
+    if (!id) {
+      return withCors(
+        NextResponse.json({ success: false, message: "Şube ID gereklidir." }, { status: 400 })
+      );
+    }
+
+    const dataToUpdate: any = {};
+    if (name) dataToUpdate.name = name;
+    if (address !== undefined) dataToUpdate.address = address;
+    if (phone !== undefined) dataToUpdate.phone = phone;
+    if (typeof isActive === "boolean") dataToUpdate.isActive = isActive;
+
+    const updated = await prisma.branch.update({
+      where: { id: String(id) },
+      data: dataToUpdate,
+    });
+
+    return withCors(
+      NextResponse.json({
+        success: true,
+        branch: updated,
+        message: "Şube güncellendi.",
+      })
+    );
+  } catch (error: any) {
+    return withCors(
+      NextResponse.json(
+        { success: false, message: "Şube güncellenemedi.", error: error.message },
+        { status: 500 }
+      )
+    );
+  }
+}
+
+export async function DELETE(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url);
+    const id = searchParams.get("id");
+
+    if (!id) {
+      return withCors(
+        NextResponse.json({ success: false, message: "Şube ID gereklidir." }, { status: 400 })
+      );
+    }
+
+    await prisma.branch.delete({ where: { id: String(id) } });
+
+    return withCors(
+      NextResponse.json({
+        success: true,
+        message: "Şube başarıyla silindi.",
+      })
+    );
+  } catch (error: any) {
+    return withCors(
+      NextResponse.json(
+        { success: false, message: "Şube silinemedi.", error: error.message },
         { status: 500 }
       )
     );

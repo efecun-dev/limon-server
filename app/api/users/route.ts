@@ -63,7 +63,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Kullanıcı adı benzersizlik kontrolü
     const existing = await prisma.user.findUnique({
       where: { username },
     });
@@ -116,6 +115,92 @@ export async function POST(req: NextRequest) {
     return withCors(
       NextResponse.json(
         { success: false, message: "Kullanıcı oluşturulamadı.", error: error.message },
+        { status: 500 }
+      )
+    );
+  }
+}
+
+export async function PATCH(req: NextRequest) {
+  try {
+    const body = await req.json();
+    const { id, isActive, role, branchId, name, password } = body;
+
+    if (!id) {
+      return withCors(
+        NextResponse.json({ success: false, message: "Kullanıcı ID gereklidir." }, { status: 400 })
+      );
+    }
+
+    const dataToUpdate: any = {};
+    if (typeof isActive === "boolean") dataToUpdate.isActive = isActive;
+    if (role) dataToUpdate.role = role as Role;
+    if (branchId !== undefined) dataToUpdate.branchId = branchId || null;
+    if (name) dataToUpdate.name = name;
+    if (password) {
+      dataToUpdate.password = await hashPassword(password);
+    }
+
+    const updated = await prisma.user.update({
+      where: { id },
+      data: dataToUpdate,
+      select: {
+        id: true,
+        username: true,
+        name: true,
+        role: true,
+        branchId: true,
+        isActive: true,
+      },
+    });
+
+    return withCors(
+      NextResponse.json({
+        success: true,
+        user: updated,
+        message: "Kullanıcı güncellendi.",
+      })
+    );
+  } catch (error: any) {
+    return withCors(
+      NextResponse.json(
+        { success: false, message: "Kullanıcı güncellenemedi.", error: error.message },
+        { status: 500 }
+      )
+    );
+  }
+}
+
+export async function DELETE(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url);
+    const id = searchParams.get("id");
+
+    if (!id) {
+      return withCors(
+        NextResponse.json({ success: false, message: "Kullanıcı ID gereklidir." }, { status: 400 })
+      );
+    }
+
+    const user = await prisma.user.findUnique({ where: { id } });
+    if (user?.username === "admin") {
+      return withCors(
+        NextResponse.json({ success: false, message: "Ana admin hesabı silinemez." }, { status: 403 })
+      );
+    }
+
+    await prisma.user.delete({ where: { id } });
+
+    return withCors(
+      NextResponse.json({
+        success: true,
+        message: "Kullanıcı başarıyla silindi.",
+      })
+    );
+  } catch (error: any) {
+    return withCors(
+      NextResponse.json(
+        { success: false, message: "Kullanıcı silinemedi.", error: error.message },
         { status: 500 }
       )
     );

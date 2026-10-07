@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 interface ApiLogItem {
   id: string;
@@ -26,6 +27,7 @@ interface LogStats {
 }
 
 export default function LogsPage() {
+  const router = useRouter();
   const [logs, setLogs] = useState<ApiLogItem[]>([]);
   const [stats, setStats] = useState<LogStats>({
     totalRequests: 0,
@@ -73,7 +75,7 @@ export default function LogsPage() {
     if (!autoRefresh) return;
     const interval = setInterval(() => {
       fetchLogs();
-    }, 3000);
+    }, 1000);
     return () => clearInterval(interval);
   }, [autoRefresh, fetchLogs]);
 
@@ -86,6 +88,15 @@ export default function LogsPage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleLogout = async () => {
+    await fetch("/api/auth/logout", { method: "POST" });
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("limon_user");
+      localStorage.removeItem("limon_token");
+    }
+    router.push("/login");
   };
 
   const copyToClipboard = (text: string, id: string) => {
@@ -137,11 +148,10 @@ export default function LogsPage() {
             {/* Auto refresh toggle */}
             <button
               onClick={() => setAutoRefresh(!autoRefresh)}
-              className={`px-3 py-1.5 rounded border transition flex items-center gap-1.5 font-medium ${
-                autoRefresh
-                  ? "bg-emerald-50 border-emerald-300 text-emerald-800"
-                  : "bg-gray-100 border-gray-300 text-gray-600"
-              }`}
+              className={`px-3 py-1.5 rounded border transition flex items-center gap-1.5 font-medium ${autoRefresh
+                ? "bg-emerald-50 border-emerald-300 text-emerald-800"
+                : "bg-gray-100 border-gray-300 text-gray-600"
+                }`}
             >
               <span className={`w-2 h-2 rounded-full ${autoRefresh ? "bg-emerald-600 animate-pulse" : "bg-gray-400"}`} />
               <span>Canlı Akış: {autoRefresh ? "Açık (3s)" : "Kapalı"}</span>
@@ -155,6 +165,12 @@ export default function LogsPage() {
               Yenile
             </button>
 
+            <Link
+              href="/settings"
+              className="px-3 py-1.5 rounded border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 font-medium transition"
+            >
+              Ayarlar
+            </Link>
             {/* Clear logs */}
             <button
               onClick={handleClearLogs}
@@ -162,6 +178,12 @@ export default function LogsPage() {
               className="px-3 py-1.5 rounded border border-red-200 bg-red-50 hover:bg-red-100 text-red-700 font-medium transition disabled:opacity-50"
             >
               Logları Temizle
+            </button>
+            <button
+              onClick={handleLogout}
+              className="px-3 py-1.5 rounded border border-red-200 bg-red-50 hover:bg-red-100 text-red-700 font-medium transition"
+            >
+              Çıkış
             </button>
           </div>
         </div>
@@ -226,11 +248,10 @@ export default function LogsPage() {
                 <button
                   key={m}
                   onClick={() => setSelectedMethod(m)}
-                  className={`px-2.5 py-1 rounded text-xs font-medium transition ${
-                    selectedMethod === m
-                      ? "bg-gray-900 text-white"
-                      : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-                  }`}
+                  className={`px-2.5 py-1 rounded text-xs font-medium transition ${selectedMethod === m
+                    ? "bg-gray-900 text-white"
+                    : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                    }`}
                 >
                   {m === "ALL" ? "Tümü" : m}
                 </button>
@@ -249,11 +270,10 @@ export default function LogsPage() {
                 <button
                   key={s.id}
                   onClick={() => setSelectedStatus(s.id)}
-                  className={`px-2.5 py-1 rounded text-xs font-medium transition ${
-                    selectedStatus === s.id
-                      ? "bg-gray-900 text-white"
-                      : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-                  }`}
+                  className={`px-2.5 py-1 rounded text-xs font-medium transition ${selectedStatus === s.id
+                    ? "bg-gray-900 text-white"
+                    : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                    }`}
                 >
                   {s.label}
                 </button>
@@ -315,15 +335,14 @@ export default function LogsPage() {
                           {/* Method */}
                           <td className="px-4 py-3">
                             <span
-                              className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                                log.method === "GET"
-                                  ? "bg-blue-50 text-blue-700 border border-blue-200"
-                                  : log.method === "POST"
+                              className={`px-2 py-0.5 rounded text-[10px] font-bold ${log.method === "GET"
+                                ? "bg-blue-50 text-blue-700 border border-blue-200"
+                                : log.method === "POST"
                                   ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
                                   : log.method === "PUT"
-                                  ? "bg-amber-50 text-amber-700 border border-amber-200"
-                                  : "bg-red-50 text-red-700 border border-red-200"
-                              }`}
+                                    ? "bg-amber-50 text-amber-700 border border-amber-200"
+                                    : "bg-red-50 text-red-700 border border-red-200"
+                                }`}
                             >
                               {log.method}
                             </span>
@@ -332,13 +351,12 @@ export default function LogsPage() {
                           {/* Status Code */}
                           <td className="px-4 py-3">
                             <span
-                              className={`px-2 py-0.5 rounded text-[11px] font-semibold inline-flex items-center gap-1 ${
-                                isSuccess
-                                  ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                                  : isClientError
+                              className={`px-2 py-0.5 rounded text-[11px] font-semibold inline-flex items-center gap-1 ${isSuccess
+                                ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                : isClientError
                                   ? "bg-amber-50 text-amber-800 border border-amber-200"
                                   : "bg-red-50 text-red-700 border border-red-200"
-                              }`}
+                                }`}
                             >
                               <span>{log.status}</span>
                               <span className="text-[10px] font-normal">
