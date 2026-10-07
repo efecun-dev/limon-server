@@ -91,12 +91,15 @@ export default function LogsPage() {
   };
 
   const handleLogout = async () => {
-    await fetch("/api/auth/logout", { method: "POST" });
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } catch {}
     if (typeof window !== "undefined") {
       localStorage.removeItem("limon_user");
       localStorage.removeItem("limon_token");
+      document.cookie = "auth-token=; path=/; max-age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT";
+      window.location.href = "/login";
     }
-    router.push("/login");
   };
 
   const copyToClipboard = (text: string, id: string) => {

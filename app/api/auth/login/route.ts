@@ -98,21 +98,24 @@ export async function POST(req: NextRequest) {
       response.cookies.set({
         name: "auth-token",
         value: token,
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
+        httpOnly: false,
+        secure: false, // VPS ve HTTP erişimlerinde çerezin tarayıcı tarafından reddedilmesini engeller
         sameSite: "lax",
         path: "/",
-        maxAge: 60 * 60 * 24, // 1 day
+        maxAge: 60 * 60 * 24, // 1 gün
       });
 
       return withCors(response);
     }
 
     // 3. Fallback: Veritabanı yoksa veya veritabanında bulunamadıysa .env.local admin kontrolü
-    const envAdminUser = process.env.ADMIN_USERNAME || "admin";
-    const envAdminPass = process.env.ADMIN_PASSWORD || "Trendyolpanel55.";
+    const envAdminUser = (process.env.ADMIN_USERNAME || "admin").trim();
+    const envAdminPass = (process.env.ADMIN_PASSWORD || "Trendyolpanel55.").trim();
 
-    if (identifier === envAdminUser && password === envAdminPass) {
+    if (
+      identifier.toLowerCase() === envAdminUser.toLowerCase() &&
+      password === envAdminPass
+    ) {
       const token = await signJwtToken({
         userId: "env-admin",
         username: envAdminUser,
@@ -141,8 +144,8 @@ export async function POST(req: NextRequest) {
       response.cookies.set({
         name: "auth-token",
         value: token,
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
+        httpOnly: false,
+        secure: false, // VPS ve HTTP erişimlerinde çerezin tarayıcı tarafından reddedilmesini engeller
         sameSite: "lax",
         path: "/",
         maxAge: 60 * 60 * 24,

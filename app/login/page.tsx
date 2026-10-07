@@ -9,10 +9,12 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setSuccessMsg(null);
     setLoading(true);
 
     try {
@@ -25,19 +27,27 @@ export default function LoginPage() {
       const data = await res.json();
 
       if (data.success) {
-        // Token ve kullanıcıyı kaydet
+        setSuccessMsg("Giriş başarılı! Yönlendiriliyorsunuz...");
+
+        // Token ve kullanıcıyı localStorage'a kaydet
         if (typeof window !== "undefined") {
           localStorage.setItem("limon_user", JSON.stringify(data.user));
-          if (data.token) localStorage.setItem("limon_token", data.token);
+          if (data.token) {
+            localStorage.setItem("limon_token", data.token);
+            // HTTP ortamlarında tarayıcı çerezi garantisi için fallback
+            document.cookie = `auth-token=${data.token}; path=/; max-age=86400; SameSite=Lax`;
+          }
+          // Kısa bir animasyon ardından tam sayfa yenileme ile ana panele yönlendir
+          setTimeout(() => {
+            window.location.href = "/";
+          }, 400);
         }
-        router.push("/");
-        router.refresh();
       } else {
-        setError(data.message || "Giriş başarısız. Bilgilerinizi kontrol edin.");
+        setError(data.message || "Giriş başarısız. Kullanıcı adı veya şifre hatalı.");
+        setLoading(false);
       }
     } catch (err: any) {
-      setError("Sunucuya bağlanırken bir hata oluştu: " + (err.message || ""));
-    } finally {
+      setError("Sunucuya bağlanırken bir hata oluştu: " + (err.message || "Bilinmeyen hata"));
       setLoading(false);
     }
   };
@@ -58,6 +68,14 @@ export default function LoginPage() {
             Sunucu Yönetim Paneli Girişi
           </p>
         </div>
+
+        {/* Success Alert */}
+        {successMsg && (
+          <div className="p-3 rounded bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-center gap-2">
+            <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+            <span>{successMsg}</span>
+          </div>
+        )}
 
         {/* Error Alert */}
         {error && (
@@ -100,9 +118,12 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-2 px-4 rounded bg-gray-900 hover:bg-black text-white font-medium text-xs transition disabled:opacity-50 cursor-pointer"
+            className="w-full py-2 px-4 rounded bg-gray-900 hover:bg-black text-white font-medium text-xs transition disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
           >
-            {loading ? "Doğrulanıyor..." : "Giriş Yap"}
+            {loading && (
+              <span className="inline-block w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
+            )}
+            <span>{successMsg ? "Yönlendiriliyor..." : loading ? "Doğrulanıyor..." : "Giriş Yap"}</span>
           </button>
         </form>
 
