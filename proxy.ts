@@ -2,10 +2,13 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { verifyJwtToken } from "@/lib/auth";
 import { corsHeaders, handleOptions } from "@/lib/cors";
+import { addApiLog, extractClientIp } from "@/lib/logger";
 
 const publicPaths = [
   "/",
   "/login",
+  "/logs",
+  "/api/logs",
   "/api/health",
   "/api/auth/login",
   "/api/auth/logout",
@@ -16,22 +19,50 @@ const publicPaths = [
 ];
 
 export async function proxy(request: NextRequest) {
-  const { pathname } = request.nextUrl;
+  const startTime = Date.now();
+  const { pathname, search } = request.nextUrl;
+  const fullPath = pathname + (search || "");
+  const method = request.method;
+  const clientIp = extractClientIp(request.headers);
+  const userAgent = request.headers.get("user-agent") || "Bilinmiyor";
 
   // Handle CORS Preflight
-  if (request.method === "OPTIONS") {
+  if (method === "OPTIONS") {
     return handleOptions();
   }
 
-  // Bypass static Next.js assets
+  // Bypass static Next.js assets & frontend pages
   if (
     pathname.startsWith("/_next") ||
     pathname.startsWith("/favicon.ico") ||
     pathname.startsWith("/public") ||
-    publicPaths.includes(pathname)
+    pathname === "/" ||
+    pathname === "/login" ||
+    pathname === "/logs"
   ) {
     const res = NextResponse.next();
     Object.entries(corsHeaders).forEach(([k, v]) => res.headers.set(k, v));
+    return res;
+  }
+
+  // Public API paths (e.g. /api/health, /api/auth/login, /api/logs)
+  if (publicPaths.includes(pathname)) {
+    const res = NextResponse.next();
+    Object.entries(corsHeaders).forEach(([k, v]) => res.headers.set(k, v));
+
+    // Log public API requests (skip /api/logs to prevent self-logging spam)
+    if (pathname.startsWith("/api/") && pathname !== "/api/logs") {
+      addApiLog({
+        method,
+        path: fullPath,
+        ip: clientIp,
+        status: 200,
+        durationMs: Date.now() - startTime,
+        userAgent,
+        authType: "Açık (Public)",
+      });
+    }
+
     return res;
   }
 
@@ -42,6 +73,19 @@ export async function proxy(request: NextRequest) {
   if (serverApiKey && expectedApiKey && serverApiKey === expectedApiKey) {
     const res = NextResponse.next();
     Object.entries(corsHeaders).forEach(([k, v]) => res.headers.set(k, v));
+
+    if (pathname.startsWith("/api/") && pathname !== "/api/logs") {
+      addApiLog({
+        method,
+        path: fullPath,
+        ip: clientIp,
+        status: 200,
+        durationMs: Date.now() - startTime,
+        userAgent,
+        authType: "X-Server-Key",
+      });
+    }
+
     return res;
   }
 
@@ -55,12 +99,38 @@ export async function proxy(request: NextRequest) {
     if (payload) {
       const res = NextResponse.next();
       Object.entries(corsHeaders).forEach(([k, v]) => res.headers.set(k, v));
+
+      if (pathname.startsWith("/api/") && pathname !== "/api/logs") {
+        addApiLog({
+          method,
+          path: fullPath,
+          ip: clientIp,
+          status: 200,
+          durationMs: Date.now() - startTime,
+          userAgent,
+          authType: "JWT Bearer",
+        });
+      }
+
       return res;
     }
   }
 
-  // If unauthorized for API routes, return 401 JSON
+  // If unauthorized for API routes, log 401 and return JSON
   if (pathname.startsWith("/api/")) {
+    if (pathname !== "/api/logs") {
+      addApiLog({
+        method,
+        path: fullPath,
+        ip: clientIp,
+        status: 401,
+        durationMs: Date.now() - startTime,
+        userAgent,
+        authType: "Yok / Geçersiz",
+        error: "401 Unauthorized",
+      });
+    }
+
     return new NextResponse(
       JSON.stringify({
         success: false,

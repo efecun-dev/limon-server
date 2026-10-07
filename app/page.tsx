@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
+import Link from "next/link";
 
 interface HealthData {
   status: string;
@@ -273,6 +274,13 @@ export default function Home() {
             >
               {isRefreshing ? "Yenileniyor..." : "Yenile"}
             </button>
+            <Link
+              href="/logs"
+              className="px-3 py-1.5 rounded border border-gray-300 bg-gray-50 hover:bg-gray-100 text-gray-800 font-medium transition flex items-center gap-1.5"
+            >
+              <span>📋</span>
+              <span>İstek Logları</span>
+            </Link>
             <a
               href="/api/health"
               target="_blank"
