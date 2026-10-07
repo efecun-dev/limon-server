@@ -61,14 +61,44 @@ interface BranchItem {
   _count?: { users: number };
 }
 
+interface RbacPermissionItem {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+}
+
+interface RbacCategoryItem {
+  id: string;
+  name: string;
+  icon: string;
+  description: string;
+  permissions: RbacPermissionItem[];
+}
+
+interface RbacData {
+  roles: Array<"ADMIN" | "MANAGER" | "CASHIER" | "USER">;
+  roleInfo: Record<string, { name: string; title: string; badge: string; description: string }>;
+  categories: RbacCategoryItem[];
+  permissions: Record<string, Record<string, boolean>>;
+}
+
 export default function SettingsPage() {
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState<"system" | "users" | "branches">("system");
+  const [activeTab, setActiveTab] = useState<"system" | "users" | "branches" | "rbac">("system");
   const [system, setSystem] = useState<SystemData | null>(null);
   const [users, setUsers] = useState<UserItem[]>([]);
   const [branches, setBranches] = useState<BranchItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ text: string; type: "success" | "error" } | null>(null);
+
+  // RBAC State
+  const [rbacData, setRbacData] = useState<RbacData | null>(null);
+  const [rbacSelectedRole, setRbacSelectedRole] = useState<"ADMIN" | "MANAGER" | "CASHIER" | "USER">("MANAGER");
+  const [rbacPermissions, setRbacPermissions] = useState<Record<string, Record<string, boolean>>>({});
+  const [rbacSearch, setRbacSearch] = useState("");
+  const [rbacSaving, setRbacSaving] = useState(false);
+  const [rbacHasChanges, setRbacHasChanges] = useState(false);
 
   // New User Form State
   const [newUser, setNewUser] = useState({
@@ -131,11 +161,27 @@ export default function SettingsPage() {
     }
   }, []);
 
+  // Fetch RBAC Matrix
+  const fetchRbac = useCallback(async () => {
+    try {
+      const res = await fetch("/api/rbac", { cache: "no-store" });
+      const data = await res.json();
+      if (data.success) {
+        setRbacData(data);
+        setRbacPermissions(data.permissions);
+        setRbacHasChanges(false);
+      }
+    } catch (e) {
+      console.error("RBAC verileri alınamadı:", e);
+    }
+  }, []);
+
   useEffect(() => {
     fetchSystem();
     fetchUsers();
     fetchBranches();
-  }, [fetchSystem, fetchUsers, fetchBranches]);
+    fetchRbac();
+  }, [fetchSystem, fetchUsers, fetchBranches, fetchRbac]);
 
   // Periodic refresh for system hardware
   useEffect(() => {
@@ -143,6 +189,95 @@ export default function SettingsPage() {
     const interval = setInterval(fetchSystem, 3000);
     return () => clearInterval(interval);
   }, [activeTab, fetchSystem]);
+
+  // RBAC: Switch İzin Değiştirici
+  const handleTogglePermission = (role: string, permId: string) => {
+    if (role === "ADMIN") {
+      showMsg("Sistem Yöneticisi (ADMIN) rolü güvenlik nedeniyle tüm yetkilere tam ve sınırsız sahiptir.", "error");
+      return;
+    }
+    setRbacPermissions((prev) => {
+      const currentRolePerms = prev[role] || {};
+      const currentVal = !!currentRolePerms[permId];
+      return {
+        ...prev,
+        [role]: {
+          ...currentRolePerms,
+          [permId]: !currentVal,
+        },
+      };
+    });
+    setRbacHasChanges(true);
+  };
+
+  // RBAC: Toplu İzin Açma / Kapatma
+  const handleBatchPermissions = (role: string, allowAll: boolean) => {
+    if (role === "ADMIN") {
+      showMsg("ADMIN rolü zaten tüm izinlere sahiptir.", "error");
+      return;
+    }
+    if (!rbacData) return;
+    const allIds = rbacData.categories.flatMap((c) => c.permissions.map((p) => p.id));
+    setRbacPermissions((prev) => {
+      const updatedRoleMap: Record<string, boolean> = {};
+      allIds.forEach((id) => {
+        updatedRoleMap[id] = allowAll;
+      });
+      return {
+        ...prev,
+        [role]: updatedRoleMap,
+      };
+    });
+    setRbacHasChanges(true);
+  };
+
+  // RBAC: İzinleri Kaydet
+  const handleSaveRbac = async () => {
+    setRbacSaving(true);
+    try {
+      const res = await fetch("/api/rbac", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          role: rbacSelectedRole,
+          permissions: rbacPermissions[rbacSelectedRole],
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showMsg(`${rbacSelectedRole} rolünün yetkileri başarıyla güncellendi ve kaydedildi.`);
+        setRbacPermissions(data.permissions);
+        setRbacHasChanges(false);
+      } else {
+        showMsg(data.message || "Yetkiler kaydedilemedi.", "error");
+      }
+    } catch (e: any) {
+      showMsg("Hata: " + e.message, "error");
+    } finally {
+      setRbacSaving(false);
+    }
+  };
+
+  // RBAC: Fabrika Ayarlarına Sıfırla
+  const handleResetRbac = async () => {
+    if (!confirm("Tüm rollerin izinleri varsayılan fabrika ayarlarına sıfırlansın mı?")) return;
+    setRbacSaving(true);
+    try {
+      const res = await fetch("/api/rbac", { method: "DELETE" });
+      const data = await res.json();
+      if (data.success) {
+        showMsg("Tüm rollerin izinleri varsayılan ayarlara sıfırlandı.");
+        setRbacPermissions(data.permissions);
+        setRbacHasChanges(false);
+      } else {
+        showMsg(data.message || "Sıfırlanamadı.", "error");
+      }
+    } catch (e: any) {
+      showMsg("Hata: " + e.message, "error");
+    } finally {
+      setRbacSaving(false);
+    }
+  };
 
   // Create User
   const handleCreateUser = async (e: React.FormEvent) => {
@@ -376,6 +511,21 @@ export default function SettingsPage() {
           >
             <span>📍</span>
             <span>Şube Yönetimi ({branches.length})</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab("rbac")}
+            className={`px-4 py-2 rounded text-xs font-medium transition flex items-center gap-2 ${
+              activeTab === "rbac"
+                ? "bg-gray-900 text-white"
+                : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+            }`}
+          >
+            <span>🛡️</span>
+            <span>Rol Yetkileri & İzinler (RBAC)</span>
+            {rbacHasChanges && (
+              <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" title="Kaydedilmemiş değişiklikler var"></span>
+            )}
           </button>
         </div>
 
@@ -829,6 +979,293 @@ export default function SettingsPage() {
                   </tbody>
                 </table>
               </div>
+            </div>
+
+          </div>
+        )}
+
+        {/* TAB 4: RBAC & ROLE PERMISSION MANAGEMENT */}
+        {activeTab === "rbac" && (
+          <div className="space-y-6">
+            
+            {/* Top Roles Cards / Selector */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              {(["ADMIN", "MANAGER", "CASHIER", "USER"] as const).map((r) => {
+                const isSelected = rbacSelectedRole === r;
+                const info = rbacData?.roleInfo?.[r] || {
+                  name: r,
+                  title: r,
+                  badge: "bg-gray-100 text-gray-700",
+                  description: "",
+                };
+                const assignedUsersCount = users.filter((u) => u.role === r).length;
+                const rolePerms = rbacPermissions[r] || {};
+                const allPermCount = rbacData?.categories.flatMap((c) => c.permissions).length || 0;
+                const activePermCount = r === "ADMIN" 
+                  ? allPermCount 
+                  : Object.values(rolePerms).filter(Boolean).length;
+
+                return (
+                  <div
+                    key={r}
+                    onClick={() => setRbacSelectedRole(r)}
+                    className={`p-4 rounded border cursor-pointer transition select-none ${
+                      isSelected
+                        ? "border-emerald-600 bg-emerald-50/30 shadow-xs ring-1 ring-emerald-600/30"
+                        : "border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50/50"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded border uppercase ${info.badge}`}>
+                        {r}
+                      </span>
+                      <span className="text-[11px] text-gray-500 font-mono">
+                        {assignedUsersCount} Kullanıcı
+                      </span>
+                    </div>
+
+                    <h3 className="text-sm font-semibold text-gray-900 mb-1">
+                      {info.title}
+                    </h3>
+                    <p className="text-[11px] text-gray-500 line-clamp-2 leading-relaxed mb-3">
+                      {info.description}
+                    </p>
+
+                    <div className="pt-2 border-t border-gray-100 flex items-center justify-between text-[11px]">
+                      <span className="text-gray-500">Yetki Kapsamı:</span>
+                      <span className={`font-semibold ${r === "ADMIN" ? "text-purple-700" : activePermCount > 0 ? "text-emerald-700" : "text-gray-400"}`}>
+                        {activePermCount} / {allPermCount} Açık
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Selected Role Alert & Notice */}
+            <div className="p-3.5 rounded border border-gray-200 bg-white flex flex-wrap items-center justify-between gap-3 text-xs">
+              <div className="flex items-center gap-3">
+                <span className="text-xl">
+                  {rbacSelectedRole === "ADMIN" ? "👑" : rbacSelectedRole === "MANAGER" ? "👔" : rbacSelectedRole === "CASHIER" ? "💳" : "👤"}
+                </span>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-gray-900">
+                      {rbacData?.roleInfo?.[rbacSelectedRole]?.title || rbacSelectedRole} Rolü İzinleri
+                    </span>
+                    <span className="text-[10px] px-1.5 py-0.2 rounded bg-gray-100 text-gray-600 font-mono">
+                      {rbacSelectedRole}
+                    </span>
+                  </div>
+                  <p className="text-gray-500 text-[11px] mt-0.5">
+                    {rbacSelectedRole === "ADMIN"
+                      ? "Sistem Yöneticisi (ADMIN) rolü, çekirdek altyapı ve güvenlik kuralları gereği daima tüm özelliklere tam yetkilidir."
+                      : `${rbacSelectedRole} rolüne atanmış personellerin panelde görebileceği ve tetikleyebileceği yetkileri switch'lerle yapılandırın.`}
+                  </p>
+                </div>
+              </div>
+
+              {rbacHasChanges && (
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-amber-50 border border-amber-200 text-amber-800 text-xs font-medium animate-pulse">
+                  <span>⚠️</span>
+                  <span>Kaydedilmemiş değişiklikler var!</span>
+                </div>
+              )}
+            </div>
+
+            {/* Action Bar & Search Filter */}
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-3 border border-gray-200 rounded">
+              {/* Search Bar */}
+              <div className="relative flex-1 min-w-[240px] max-w-md">
+                <span className="absolute inset-y-0 left-0 pl-2.5 flex items-center pointer-events-none text-gray-400 text-xs">
+                  🔍
+                </span>
+                <input
+                  type="text"
+                  placeholder="İzinlerde ara (örn: fiyat, sipariş, stok, log, silme)..."
+                  value={rbacSearch}
+                  onChange={(e) => setRbacSearch(e.target.value)}
+                  className="w-full pl-8 pr-3 py-1.5 rounded border border-gray-300 text-xs text-gray-900 focus:outline-none focus:border-emerald-600 bg-white"
+                />
+              </div>
+
+              {/* Quick Actions */}
+              <div className="flex items-center gap-2">
+                {rbacSelectedRole !== "ADMIN" && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => handleBatchPermissions(rbacSelectedRole, true)}
+                      className="px-2.5 py-1.5 rounded border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-medium transition cursor-pointer"
+                    >
+                      Tümünü Aç
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleBatchPermissions(rbacSelectedRole, false)}
+                      className="px-2.5 py-1.5 rounded border border-gray-300 bg-gray-50 hover:bg-gray-100 text-gray-700 text-xs font-medium transition cursor-pointer"
+                    >
+                      Tümünü Kapat
+                    </button>
+                  </>
+                )}
+
+                <button
+                  type="button"
+                  onClick={handleResetRbac}
+                  disabled={rbacSaving}
+                  className="px-2.5 py-1.5 rounded border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-800 text-xs font-medium transition cursor-pointer disabled:opacity-50"
+                >
+                  Fabrika Ayarlarına Sıfırla
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleSaveRbac}
+                  disabled={rbacSaving || (!rbacHasChanges && rbacSelectedRole === "ADMIN")}
+                  className={`px-4 py-1.5 rounded text-xs font-semibold text-white transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 ${
+                    rbacHasChanges ? "bg-emerald-600 hover:bg-emerald-700 shadow-sm" : "bg-gray-900 hover:bg-black"
+                  }`}
+                >
+                  {rbacSaving && (
+                    <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
+                  )}
+                  <span>{rbacSaving ? "Kaydediliyor..." : "Değişiklikleri Kaydet"}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Categorized Permissions Grid */}
+            <div className="space-y-5">
+              {(rbacData?.categories || [])
+                .filter((cat) => {
+                  if (!rbacSearch.trim()) return true;
+                  const q = rbacSearch.toLowerCase();
+                  if (cat.name.toLowerCase().includes(q) || cat.description.toLowerCase().includes(q)) return true;
+                  return cat.permissions.some(
+                    (p) =>
+                      p.name.toLowerCase().includes(q) ||
+                      p.description.toLowerCase().includes(q) ||
+                      p.id.toLowerCase().includes(q)
+                  );
+                })
+                .map((cat) => {
+                  const filteredPerms = cat.permissions.filter((p) => {
+                    if (!rbacSearch.trim()) return true;
+                    const q = rbacSearch.toLowerCase();
+                    return (
+                      cat.name.toLowerCase().includes(q) ||
+                      p.name.toLowerCase().includes(q) ||
+                      p.description.toLowerCase().includes(q) ||
+                      p.id.toLowerCase().includes(q)
+                    );
+                  });
+
+                  if (filteredPerms.length === 0) return null;
+
+                  const rolePerms = rbacPermissions[rbacSelectedRole] || {};
+                  const allowedInCategory = filteredPerms.filter((p) =>
+                    rbacSelectedRole === "ADMIN" ? true : !!rolePerms[p.id]
+                  ).length;
+
+                  return (
+                    <div
+                      key={cat.id}
+                      className="bg-white border border-gray-200 rounded p-4 sm:p-5 space-y-4"
+                    >
+                      {/* Category Header */}
+                      <div className="flex flex-wrap items-center justify-between pb-3 border-b border-gray-100 gap-2">
+                        <div className="flex items-center gap-2.5">
+                          <span className="text-xl">{cat.icon}</span>
+                          <div>
+                            <h4 className="text-xs font-semibold text-gray-900 uppercase tracking-wide">
+                              {cat.name}
+                            </h4>
+                            <p className="text-[11px] text-gray-500">
+                              {cat.description}
+                            </p>
+                          </div>
+                        </div>
+
+                        <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-gray-100 text-gray-700">
+                          {allowedInCategory} / {filteredPerms.length} İzin Açık
+                        </span>
+                      </div>
+
+                      {/* Permissions List / Grid */}
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                        {filteredPerms.map((perm) => {
+                          const isAllowed =
+                            rbacSelectedRole === "ADMIN" ? true : !!rolePerms[perm.id];
+
+                          return (
+                            <div
+                              key={perm.id}
+                              className={`p-3 rounded border transition flex items-start justify-between gap-3 ${
+                                isAllowed
+                                  ? "border-emerald-200 bg-emerald-50/20"
+                                  : "border-gray-200 bg-gray-50/40"
+                              }`}
+                            >
+                              <div className="space-y-1 pr-2">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs font-medium text-gray-900">
+                                    {perm.name}
+                                  </span>
+                                </div>
+                                <p className="text-[11px] text-gray-500 leading-relaxed">
+                                  {perm.description}
+                                </p>
+                                <code className="text-[10px] font-mono text-gray-400 inline-block bg-gray-100/80 px-1 py-0.2 rounded">
+                                  {perm.id}
+                                </code>
+                              </div>
+
+                              {/* Toggle Switch Input */}
+                              <div className="flex flex-col items-end gap-1 shrink-0 pt-0.5">
+                                <button
+                                  type="button"
+                                  role="switch"
+                                  aria-checked={isAllowed}
+                                  disabled={rbacSelectedRole === "ADMIN" || rbacSaving}
+                                  onClick={() => handleTogglePermission(rbacSelectedRole, perm.id)}
+                                  className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                                    isAllowed ? "bg-emerald-600" : "bg-gray-300"
+                                  } ${
+                                    rbacSelectedRole === "ADMIN"
+                                      ? "opacity-60 cursor-not-allowed"
+                                      : "cursor-pointer"
+                                  }`}
+                                  title={
+                                    rbacSelectedRole === "ADMIN"
+                                      ? "ADMIN rolü yetkileri kısıtlanamaz"
+                                      : isAllowed
+                                      ? "İzni kapatmak için tıklayın"
+                                      : "İzni açmak için tıklayın"
+                                  }
+                                >
+                                  <span className="sr-only">{perm.name}</span>
+                                  <span
+                                    className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-xs ring-0 transition duration-200 ease-in-out ${
+                                      isAllowed ? "translate-x-4" : "translate-x-0"
+                                    }`}
+                                  />
+                                </button>
+                                <span
+                                  className={`text-[10px] font-semibold ${
+                                    isAllowed ? "text-emerald-700" : "text-gray-400"
+                                  }`}
+                                >
+                                  {isAllowed ? "Açık" : "Kapalı"}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
             </div>
 
           </div>

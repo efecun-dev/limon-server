@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyJwtToken } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { withCors } from "@/lib/cors";
+import { getUserPermissions } from "@/lib/rbac";
 
 export const dynamic = "force-dynamic";
 
@@ -74,10 +75,16 @@ export async function GET(req: NextRequest) {
       branch: payload.branchName ? { id: payload.branchId, name: payload.branchName } : null,
     };
 
+    const userRole = (user.role || "USER").toString();
+    const permissions = await getUserPermissions(userRole);
+
     return withCors(
       NextResponse.json({
         success: true,
-        user,
+        user: {
+          ...user,
+          permissions,
+        },
       })
     );
   } catch (error: any) {

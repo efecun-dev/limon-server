@@ -1,15 +1,35 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 
 export default function LoginPage() {
   const router = useRouter();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [rememberMe, setRememberMe] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  const usernameInputRef = useRef<HTMLInputElement>(null);
+  const passwordInputRef = useRef<HTMLInputElement>(null);
+
+  // Sayfa yüklendiğinde en son giriş yapılan kullanıcı adını getir
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const savedUser = localStorage.getItem("limon_remembered_username");
+      if (savedUser) {
+        setUsername(savedUser);
+        // Kullanıcı adı hazır olduğundan imleci doğrudan şifre alanına odaklar
+        setTimeout(() => {
+          passwordInputRef.current?.focus();
+        }, 60);
+      } else {
+        usernameInputRef.current?.focus();
+      }
+    }
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -18,10 +38,11 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
+      const trimmedUser = username.trim();
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: username.trim(), password }),
+        body: JSON.stringify({ username: trimmedUser, password }),
       });
 
       const data = await res.json();
@@ -29,18 +50,26 @@ export default function LoginPage() {
       if (data.success) {
         setSuccessMsg("Giriş başarılı! Yönlendiriliyorsunuz...");
 
-        // Token ve kullanıcıyı localStorage'a kaydet
         if (typeof window !== "undefined") {
+          // Kullanıcı adını hatırla / güncelle (şifre asla saklanmaz)
+          if (rememberMe) {
+            localStorage.setItem("limon_remembered_username", trimmedUser);
+          } else {
+            localStorage.removeItem("limon_remembered_username");
+          }
+
+          // Token ve kullanıcıyı localStorage'a kaydet
           localStorage.setItem("limon_user", JSON.stringify(data.user));
           if (data.token) {
             localStorage.setItem("limon_token", data.token);
             // HTTP ortamlarında tarayıcı çerezi garantisi için fallback
             document.cookie = `auth-token=${data.token}; path=/; max-age=86400; SameSite=Lax`;
           }
+
           // Kısa bir animasyon ardından tam sayfa yenileme ile ana panele yönlendir
           setTimeout(() => {
             window.location.href = "/";
-          }, 400);
+          }, 350);
         }
       } else {
         setError(data.message || "Giriş başarısız. Kullanıcı adı veya şifre hatalı.");
@@ -91,9 +120,9 @@ export default function LoginPage() {
               Kullanıcı Adı
             </label>
             <input
+              ref={usernameInputRef}
               type="text"
               required
-              autoFocus
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               placeholder="admin"
@@ -106,6 +135,7 @@ export default function LoginPage() {
               Şifre
             </label>
             <input
+              ref={passwordInputRef}
               type="password"
               required
               value={password}
@@ -113,6 +143,18 @@ export default function LoginPage() {
               placeholder="••••••••"
               className="w-full px-3 py-2 border border-gray-300 rounded text-xs text-gray-900 focus:outline-none focus:border-emerald-600 bg-white"
             />
+          </div>
+
+          <div className="flex items-center justify-between pt-0.5">
+            <label className="inline-flex items-center gap-2 cursor-pointer select-none text-gray-600 hover:text-gray-900">
+              <input
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.target.checked)}
+                className="w-3.5 h-3.5 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer accent-emerald-600"
+              />
+              <span className="text-[11px]">Kullanıcı adını hatırla</span>
+            </label>
           </div>
 
           <button
