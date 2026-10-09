@@ -12,6 +12,7 @@ const publicApiPaths = [
   "/api/trendyol-webhook",
   "/api/updates/check",
   "/api/updates/download",
+  "/api/system/telegram-notifier",
 ];
 
 export async function proxy(request: NextRequest) {

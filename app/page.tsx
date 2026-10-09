@@ -86,6 +86,54 @@ export default function Home() {
   const [searchQuery, setSearchQuery] = useState("");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [hoveredBar, setHoveredBar] = useState<string | null>(null);
+  const [notifierState, setNotifierState] = useState<any>(null);
+  const [isSendingTest, setIsSendingTest] = useState(false);
+  const [testResult, setTestResult] = useState<string | null>(null);
+
+  const fetchNotifierState = useCallback(async () => {
+    try {
+      const res = await fetch("/api/system/telegram-notifier", { cache: "no-store" });
+      const data = await res.json();
+      if (data.success) {
+        setNotifierState(data);
+      }
+    } catch {}
+  }, []);
+
+  const handleSendTestMessage = async () => {
+    setIsSendingTest(true);
+    setTestResult(null);
+    try {
+      const res = await fetch("/api/system/telegram-notifier", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "test" }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setTestResult("✅ Test bildirimi Telegram'a başarıyla iletildi!");
+      } else {
+        setTestResult("❌ Gönderim başarısız: " + (data.error || "Bilinmeyen hata"));
+      }
+      fetchNotifierState();
+    } catch (e: any) {
+      setTestResult("❌ Hata: " + e.message);
+    } finally {
+      setIsSendingTest(false);
+      setTimeout(() => setTestResult(null), 5000);
+    }
+  };
+
+  const handleUpdateInterval = async (ms: number) => {
+    try {
+      await fetch("/api/system/telegram-notifier", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "config", config: { orderPollIntervalMs: ms } }),
+      });
+      fetchNotifierState();
+    } catch {}
+  };
 
   const fetchHealth = useCallback(async () => {
     setIsRefreshing(true);
@@ -107,9 +155,13 @@ export default function Home() {
 
   useEffect(() => {
     fetchHealth();
-    const interval = setInterval(fetchHealth, 10000);
+    fetchNotifierState();
+    const interval = setInterval(() => {
+      fetchHealth();
+      fetchNotifierState();
+    }, 8000);
     return () => clearInterval(interval);
-  }, [fetchHealth]);
+  }, [fetchHealth, fetchNotifierState]);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -243,6 +295,8 @@ export default function Home() {
     { method: "GET", path: "/api/seviyeler", auth: "X-Server-Key / JWT", category: "Trendyol", desc: "Trendyol Go satıcı performans seviyeleri ve komisyon oranları" },
     { method: "POST", path: "/api/trendyol-webhook", auth: "Basic Auth", category: "Webhook", desc: "Trendyol anlık canlı sipariş bildirim webhook alıcısı" },
     { method: "POST", path: "/api/telegram", auth: "X-Server-Key / JWT", category: "Bildirim", desc: "Operasyon ekiplerine Telegram üzerinden anlık alarm gönderme" },
+    { method: "GET", path: "/api/system/telegram-notifier", auth: "Açık", category: "Bildirim", desc: "Arka plan Telegram bildirim motoru canlı durumu ve istatistikleri" },
+    { method: "POST", path: "/api/system/telegram-notifier", auth: "Açık / JWT", category: "Bildirim", desc: "Bildirim motorunu başlatma, durdurma, hız ayarı ve test bildirimi" },
     { method: "GET", path: "/api/updates/check", auth: "Açık", category: "Güncelleme", desc: "GitHub Private Repo son sürüm denetleyicisi" },
     { method: "GET", path: "/api/updates/download", auth: "Açık", category: "Güncelleme", desc: "Yeni sürüm kurulum dosyasını indirme proxy köprüsü" },
   ];
@@ -391,6 +445,187 @@ export default function Home() {
               </span>
             </div>
 
+          </div>
+        </section>
+
+        {/* TELEGRAM NOTIFIER LIVE MONITOR SECTION */}
+        <section className="w-full bg-white border border-gray-200 rounded-lg shadow-xs overflow-hidden">
+          <div className="p-5 border-b border-gray-100 flex flex-wrap items-center justify-between gap-4 bg-gradient-to-r from-gray-50/80 to-white">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-sky-500/10 text-sky-600 flex items-center justify-center text-xl font-bold shadow-xs">
+                ✈️
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-base font-semibold text-gray-900">
+                    Telegram Canlı Bildirim Motoru (7/24 Server Daemon)
+                  </h3>
+                  <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold flex items-center gap-1.5 ${
+                    notifierState?.isRunning
+                      ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                      : "bg-amber-50 text-amber-700 border border-amber-200"
+                  }`}>
+                    <span className={`w-2 h-2 rounded-full ${notifierState?.isRunning ? "bg-emerald-500 animate-pulse" : "bg-amber-500"}`} />
+                    {notifierState?.isRunning ? "AKTİF • 7/24 DİNLİYOR" : "BEKLEMEDE"}
+                  </span>
+                </div>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  Yeni siparişler, iptaller, müşteri yorumları ve iade talepleri istemcilere bağımlı olmadan doğrudan sunucudan anlık iletilir.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap">
+              {/* Tarama Frekansı Seçimi */}
+              <div className="flex items-center gap-1 bg-gray-100 p-1 rounded border border-gray-200 text-xs">
+                <span className="text-[11px] text-gray-500 px-1 font-medium">Hız:</span>
+                {[500, 800, 1000].map((ms) => (
+                  <button
+                    key={ms}
+                    onClick={() => handleUpdateInterval(ms)}
+                    className={`px-2 py-0.5 rounded text-[11px] font-medium transition ${
+                      notifierState?.config?.orderPollIntervalMs === ms
+                        ? "bg-white text-gray-900 shadow-xs border border-gray-200 font-semibold"
+                        : "text-gray-600 hover:text-gray-900"
+                    }`}
+                  >
+                    {ms}ms
+                  </button>
+                ))}
+              </div>
+
+              <button
+                onClick={handleSendTestMessage}
+                disabled={isSendingTest}
+                className="px-3 py-1.5 rounded bg-sky-600 hover:bg-sky-700 active:bg-sky-800 text-white text-xs font-medium transition flex items-center gap-1.5 shadow-xs disabled:opacity-50"
+              >
+                <span>🧪</span>
+                <span>{isSendingTest ? "Gönderiliyor..." : "Test Bildirimi Gönder"}</span>
+              </button>
+
+              <button
+                onClick={fetchNotifierState}
+                className="px-2.5 py-1.5 rounded border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 text-xs font-medium transition"
+                title="Durumu Yenile"
+              >
+                🔄
+              </button>
+            </div>
+          </div>
+
+          {testResult && (
+            <div className="px-5 py-2.5 bg-sky-50 border-b border-sky-100 text-xs text-sky-800 flex items-center justify-between">
+              <span>{testResult}</span>
+              <button onClick={() => setTestResult(null)} className="text-sky-600 hover:text-sky-900 font-bold">✕</button>
+            </div>
+          )}
+
+          {/* Metric Tiles */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 divide-x divide-y sm:divide-y-0 divide-gray-100 border-b border-gray-100 text-xs bg-white">
+            <div className="p-4 space-y-1">
+              <div className="flex items-center justify-between text-gray-500">
+                <span className="font-medium">🚨 Yeni Siparişler</span>
+                <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 text-[10px] font-bold">
+                  {notifierState?.config?.orderPollIntervalMs || 800}ms
+                </span>
+              </div>
+              <div className="text-xl font-bold text-gray-900">
+                {notifierState?.stats?.newOrdersSent ?? 0} <span className="text-xs font-normal text-gray-400">gönderildi</span>
+              </div>
+              <div className="text-[11px] text-gray-400">
+                Hafızadaki: {notifierState?.knownCounters?.orders ?? 0} sipariş
+              </div>
+            </div>
+
+            <div className="p-4 space-y-1">
+              <div className="flex items-center justify-between text-gray-500">
+                <span className="font-medium">❌ İptal Siparişler</span>
+                <span className="px-1.5 py-0.5 rounded bg-red-50 text-red-700 text-[10px] font-bold">
+                  Anlık
+                </span>
+              </div>
+              <div className="text-xl font-bold text-gray-900">
+                {notifierState?.stats?.cancelledOrdersSent ?? 0} <span className="text-xs font-normal text-gray-400">gönderildi</span>
+              </div>
+              <div className="text-[11px] text-gray-400">
+                Hafızadaki: {notifierState?.knownCounters?.cancels ?? 0} iptal
+              </div>
+            </div>
+
+            <div className="p-4 space-y-1">
+              <div className="flex items-center justify-between text-gray-500">
+                <span className="font-medium">⭐ Müşteri Yorumları</span>
+                <span className="px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 text-[10px] font-bold">
+                  30s
+                </span>
+              </div>
+              <div className="text-xl font-bold text-gray-900">
+                {notifierState?.stats?.reviewsSent ?? 0} <span className="text-xs font-normal text-gray-400">gönderildi</span>
+              </div>
+              <div className="text-[11px] text-gray-400">
+                Hafızadaki: {notifierState?.knownCounters?.reviews ?? 0} yorum
+              </div>
+            </div>
+
+            <div className="p-4 space-y-1">
+              <div className="flex items-center justify-between text-gray-500">
+                <span className="font-medium">🔄 İade Talepleri</span>
+                <span className="px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 text-[10px] font-bold">
+                  15s
+                </span>
+              </div>
+              <div className="text-xl font-bold text-gray-900">
+                {notifierState?.stats?.claimsSent ?? 0} <span className="text-xs font-normal text-gray-400">gönderildi</span>
+              </div>
+              <div className="text-[11px] text-gray-400">
+                Hafızadaki: {notifierState?.knownCounters?.claims ?? 0} iade
+              </div>
+            </div>
+          </div>
+
+          {/* Son Bildirim Kayıtları */}
+          <div className="p-4 bg-gray-50/50">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
+                Son Bildirim Akışı
+              </span>
+              <span className="text-[11px] text-gray-400">
+                Toplam Sipariş Kontrolü: <strong>{notifierState?.stats?.ordersCheckedCount?.toLocaleString("tr-TR") ?? 0}</strong> kez
+              </span>
+            </div>
+
+            {notifierState?.recentLogs && notifierState.recentLogs.length > 0 ? (
+              <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                {notifierState.recentLogs.map((log: any) => (
+                  <div
+                    key={log.id}
+                    className="p-2 rounded bg-white border border-gray-200 text-xs flex items-center justify-between gap-3 shadow-2xs"
+                  >
+                    <div className="flex items-center gap-2 overflow-hidden">
+                      <span className="text-sm">
+                        {log.type === "order" ? "🚨" : log.type === "cancel" ? "❌" : log.type === "review" ? "⭐" : log.type === "claim" ? "🔄" : "⚡"}
+                      </span>
+                      <div className="truncate">
+                        <span className="font-semibold text-gray-900">{log.title}</span>
+                        <span className="text-gray-500 ml-2">{log.message}</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 whitespace-nowrap text-[11px] text-gray-400">
+                      <span>{new Date(log.timestamp).toLocaleTimeString("tr-TR")}</span>
+                      <span className={`px-1.5 py-0.2 rounded text-[10px] font-medium ${
+                        log.success ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"
+                      }`}>
+                        {log.success ? "İletildi" : "Hata"}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="py-6 text-center text-xs text-gray-400 bg-white rounded border border-dashed border-gray-200">
+                Henüz yeni bildirim tetiklenmedi. Bildirim motoru arka planda aktif olarak dinliyor.
+              </div>
+            )}
           </div>
         </section>
 

@@ -3,6 +3,7 @@ import { redis } from "@/lib/redis";
 import { prisma } from "@/lib/prisma";
 import { withCors } from "@/lib/cors";
 import { BRANCHES } from "@/lib/branches";
+import { getTelegramNotifier } from "@/lib/telegram-notifier";
 
 export async function GET() {
   const startTime = Date.now();
@@ -80,6 +81,8 @@ export async function GET() {
         },
         telegram: {
           status: process.env.TELEGRAM_BOT_TOKEN ? "active" : "standby",
+          botActive: !!process.env.TELEGRAM_BOT_TOKEN,
+          notifierEngine: getTelegramNotifier().getStatus(),
         },
         github: {
           status: process.env.GITHUB_UPDATE_TOKEN ? "active" : "standby",

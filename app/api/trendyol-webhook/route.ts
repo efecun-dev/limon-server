@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { redis } from "@/lib/redis";
 import { sendTelegramMessage } from "@/lib/telegram";
+import { getTelegramNotifier } from "@/lib/telegram-notifier";
 
 export async function POST(req: NextRequest) {
   try {
@@ -56,20 +57,9 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // b. Önemli durumlarda Telegram Bildirimi
-    if (packageStatus === "Created") {
-      const msg = `🚨 <b>YENİ SİPARİŞ (GO)</b>\n\n` +
-                  `📦 Sipariş No: <b>${orderNumber}</b>\n` +
-                  `🏪 Mağaza ID: ${storeId}\n` +
-                  `💰 Tutar: ${body.totalPrice} ${body.currencyCode}\n` +
-                  `👤 Müşteri: ${body.customer?.firstName} ${body.customer?.lastName}`;
-      await sendTelegramMessage(msg);
-    } else if (packageStatus === "Cancelled" || packageStatus === "UnSupplied") {
-       const msg = `❌ <b>SİPARİŞ İPTAL EDİLDİ</b>\n\n` +
-                   `📦 Sipariş No: <b>${orderNumber}</b>\n` +
-                   `⚠️ Durum: ${packageStatus}`;
-       await sendTelegramMessage(msg);
-    }
+    // b. Önemli durumlarda Telegram Bildirimi (Merkezi motor üzerinden zengin format ve tekilleştirme)
+    const notifier = getTelegramNotifier();
+    await notifier.handleWebhookOrder(body);
 
     console.log(`[Webhook] Başarıyla işlendi: Sipariş ${orderNumber}, Durum: ${packageStatus}`);
     
