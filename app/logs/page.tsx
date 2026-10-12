@@ -1,8 +1,36 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, Fragment } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+
+// IP Adres Formatlayıcı (IPv6-mapped ::ffff:1.2.3.4, ::1, port temizleme)
+function formatIp(rawIp: string | null | undefined): string {
+  if (!rawIp) return "127.0.0.1";
+  let ip = rawIp.trim();
+
+  // Köşeli parantez içindeyse: [::ffff:1.2.3.4]:port veya [::1]
+  if (ip.startsWith("[") && ip.includes("]")) {
+    ip = ip.split("]")[0].replace("[", "");
+  }
+
+  // IPv6-mapped IPv4 önekini kaldır (örn: ::ffff:78.189.189.50 -> 78.189.189.50)
+  if (ip.startsWith("::ffff:")) {
+    ip = ip.substring(7);
+  }
+
+  // IPv6 localhost gösterimini IPv4 127.0.0.1 yap
+  if (ip === "::1" || ip === "0:0:0:0:0:0:0:1") {
+    return "127.0.0.1";
+  }
+
+  // Port numarası eklenmişse (örn: 78.189.189.50:54321) portu ayıkla
+  if (ip.includes(".") && ip.includes(":")) {
+    ip = ip.split(":")[0];
+  }
+
+  return ip || "127.0.0.1";
+}
 
 interface ApiLogItem {
   id: string;
@@ -299,24 +327,24 @@ export default function LogsPage() {
         {/* Real-Time Logs Table - Full Width */}
         <section className="w-full bg-white border border-gray-200 rounded-md overflow-hidden shadow-xs">
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs border-collapse">
+            <table className="w-full text-left text-xs border-collapse min-w-[1000px]">
               <thead className="bg-gray-50 text-gray-600 uppercase font-semibold text-[11px] border-b border-gray-200">
                 <tr>
-                  <th className="px-4 py-3 w-24">Saat</th>
-                  <th className="px-4 py-3 w-20">Metot</th>
-                  <th className="px-4 py-3 w-28">Durum Kodu</th>
-                  <th className="px-4 py-3">İstek Yolu (Endpoint)</th>
-                  <th className="px-4 py-3 w-36">İstemci IP Adresi</th>
-                  <th className="px-4 py-3 w-24">Gecikme</th>
-                  <th className="px-4 py-3 w-32">Yetkilendirme</th>
-                  <th className="px-4 py-3 w-48">İstemci (User-Agent)</th>
-                  <th className="px-4 py-3 w-20 text-right">Detay</th>
+                  <th className="px-4 py-3 w-24 min-w-[96px]">Saat</th>
+                  <th className="px-4 py-3 w-20 min-w-[80px]">Metot</th>
+                  <th className="px-4 py-3 w-28 min-w-[112px]">Durum</th>
+                  <th className="px-4 py-3 min-w-[240px]">İstek Yolu (Endpoint)</th>
+                  <th className="px-4 py-3 w-36 min-w-[144px]">İstemci IP Adresi</th>
+                  <th className="px-4 py-3 w-24 min-w-[96px]">Gecikme</th>
+                  <th className="px-4 py-3 w-32 min-w-[128px]">Yetkilendirme</th>
+                  <th className="px-4 py-3 w-48 min-w-[192px]">İstemci (User-Agent)</th>
+                  <th className="px-4 py-3 w-20 min-w-[80px] text-right">Detay</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {logs.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="px-4 py-12 text-center text-gray-500">
+                    <td colSpan={9} className="px-4 py-12 text-center text-gray-500 font-medium">
                       Henüz kaydedilmiş API isteği bulunmuyor veya filtreye uygun log yok.
                     </td>
                   </tr>
@@ -326,141 +354,164 @@ export default function LogsPage() {
                     const isSuccess = log.status >= 200 && log.status < 300;
                     const isClientError = log.status >= 400 && log.status < 500;
                     const isServerError = log.status >= 500;
+                    const cleanIp = formatIp(log.ip);
 
                     return (
-                      <tbody key={log.id} className="border-b border-gray-100">
-                        <tr className="hover:bg-gray-50/80 transition-colors">
-                          {/* Timestamp */}
+                      <Fragment key={log.id}>
+                        <tr className={`transition-colors border-b border-gray-100 ${isExpanded ? "bg-emerald-50/20" : "hover:bg-gray-50/80"}`}>
+                          {/* Saat */}
                           <td className="px-4 py-3 text-gray-500 font-mono text-[11px] whitespace-nowrap">
                             {formatTime(log.timestamp)}
                           </td>
 
-                          {/* Method */}
-                          <td className="px-4 py-3">
+                          {/* Metot */}
+                          <td className="px-4 py-3 whitespace-nowrap">
                             <span
-                              className={`px-2 py-0.5 rounded text-[10px] font-bold ${log.method === "GET"
-                                ? "bg-blue-50 text-blue-700 border border-blue-200"
-                                : log.method === "POST"
+                              className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                log.method === "GET"
+                                  ? "bg-blue-50 text-blue-700 border border-blue-200"
+                                  : log.method === "POST"
                                   ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
                                   : log.method === "PUT"
-                                    ? "bg-amber-50 text-amber-700 border border-amber-200"
-                                    : "bg-red-50 text-red-700 border border-red-200"
-                                }`}
+                                  ? "bg-amber-50 text-amber-700 border border-amber-200"
+                                  : "bg-red-50 text-red-700 border border-red-200"
+                              }`}
                             >
                               {log.method}
                             </span>
                           </td>
 
-                          {/* Status Code */}
-                          <td className="px-4 py-3">
+                          {/* Durum Kodu */}
+                          <td className="px-4 py-3 whitespace-nowrap">
                             <span
-                              className={`px-2 py-0.5 rounded text-[11px] font-semibold inline-flex items-center gap-1 ${isSuccess
-                                ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                                : isClientError
+                              className={`px-2 py-0.5 rounded text-[11px] font-semibold inline-flex items-center gap-1.5 ${
+                                isSuccess
+                                  ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                  : isClientError
                                   ? "bg-amber-50 text-amber-800 border border-amber-200"
                                   : "bg-red-50 text-red-700 border border-red-200"
-                                }`}
+                              }`}
                             >
+                              <span className={`w-1.5 h-1.5 rounded-full ${isSuccess ? "bg-emerald-500" : isClientError ? "bg-amber-500" : "bg-red-500"}`} />
                               <span>{log.status}</span>
-                              <span className="text-[10px] font-normal">
-                                {log.status === 200 ? "OK" : log.status === 401 ? "Unauthorized" : ""}
+                              <span className="text-[10px] font-normal opacity-80">
+                                {log.status === 200 ? "OK" : log.status === 401 ? "Yetkisiz" : log.status === 404 ? "Bulunamadı" : log.status >= 500 ? "Hata" : ""}
                               </span>
                             </span>
                           </td>
 
-                          {/* Path */}
-                          <td className="px-4 py-3 font-mono font-medium text-gray-900">
-                            <div className="flex items-center gap-2">
-                              <span>{log.path}</span>
+                          {/* Endpoint */}
+                          <td className="px-4 py-3 text-gray-900">
+                            <div className="flex items-center gap-2 max-w-[340px]">
+                              <span className="font-mono text-xs font-semibold truncate text-gray-900" title={log.path}>
+                                {log.path}
+                              </span>
                               <button
                                 onClick={() => copyToClipboard(log.path, `p-${log.id}`)}
-                                className="text-[10px] text-gray-400 hover:text-gray-700"
-                                title="Yolu Kopyala"
+                                className="text-xs text-gray-400 hover:text-gray-700 p-0.5 rounded hover:bg-gray-100 transition shrink-0 cursor-pointer"
+                                title="Endpoint Yolunu Kopyala"
                               >
                                 {copiedKey === `p-${log.id}` ? "✓" : "📋"}
                               </button>
                             </div>
                           </td>
 
-                          {/* IP Address */}
-                          <td className="px-4 py-3 font-mono text-gray-800 font-semibold text-[11px]">
-                            <div className="flex items-center gap-1.5">
+                          {/* İstemci IP Adresi (Temiz Format) */}
+                          <td className="px-4 py-3 whitespace-nowrap">
+                            <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-gray-100 border border-gray-200 text-gray-800 font-mono text-[11px] font-semibold">
                               <span className="w-1.5 h-1.5 rounded-full bg-cyan-600"></span>
-                              <span>{log.ip}</span>
+                              <span>{cleanIp}</span>
                             </div>
                           </td>
 
-                          {/* Latency */}
-                          <td className="px-4 py-3 text-gray-600 font-mono text-[11px]">
-                            <span className={log.durationMs > 200 ? "text-amber-600 font-bold" : "text-gray-700"}>
+                          {/* Gecikme */}
+                          <td className="px-4 py-3 whitespace-nowrap font-mono text-[11px]">
+                            <span className={`font-semibold ${log.durationMs > 200 ? "text-amber-600" : log.durationMs > 500 ? "text-red-600" : "text-gray-700"}`}>
                               {log.durationMs} ms
                             </span>
                           </td>
 
-                          {/* Auth Type */}
-                          <td className="px-4 py-3 text-gray-600 text-[11px]">
-                            <span className="px-1.5 py-0.5 rounded bg-gray-100 text-gray-700 border border-gray-200">
+                          {/* Yetkilendirme */}
+                          <td className="px-4 py-3 whitespace-nowrap text-[11px]">
+                            <span className="px-2 py-0.5 rounded bg-gray-100 text-gray-700 border border-gray-200 font-medium">
                               {log.authType}
                             </span>
                           </td>
 
                           {/* User Agent */}
-                          <td className="px-4 py-3 text-gray-500 text-[11px] max-w-[200px] truncate" title={log.userAgent}>
-                            {log.userAgent}
+                          <td className="px-4 py-3 text-gray-500 text-[11px]">
+                            <div className="max-w-[200px] truncate" title={log.userAgent}>
+                              {log.userAgent}
+                            </div>
                           </td>
 
-                          {/* Action Button */}
-                          <td className="px-4 py-3 text-right">
+                          {/* Detay Butonu */}
+                          <td className="px-4 py-3 text-right whitespace-nowrap">
                             <button
                               onClick={() => setExpandedLogId(isExpanded ? null : log.id)}
-                              className="px-2 py-0.5 rounded border border-gray-300 bg-white hover:bg-gray-100 text-gray-700 text-[11px]"
+                              className={`px-2.5 py-1 rounded border text-xs font-medium transition cursor-pointer ${
+                                isExpanded
+                                  ? "bg-gray-900 text-white border-gray-900"
+                                  : "bg-white hover:bg-gray-100 text-gray-700 border-gray-300"
+                              }`}
                             >
                               {isExpanded ? "Kapat" : "İncele"}
                             </button>
                           </td>
                         </tr>
 
-                        {/* Expanded Detail Box */}
+                        {/* Expanded Detay Kutusu */}
                         {isExpanded && (
-                          <tr className="bg-gray-50">
-                            <td colSpan={9} className="p-4 border-t border-b border-gray-200">
-                              <div className="bg-white border border-gray-200 rounded p-3 text-xs font-mono space-y-2">
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-gray-700">
+                          <tr className="bg-gray-50/90 border-b border-gray-200">
+                            <td colSpan={9} className="p-4">
+                              <div className="bg-white border border-gray-200 rounded p-4 text-xs font-mono space-y-3 shadow-xs">
+                                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 text-gray-700">
                                   <div>
-                                    <strong className="text-gray-900">Tam İstek Zamanı:</strong> {log.timestamp}
+                                    <strong className="text-gray-900 block mb-0.5 font-sans text-xs">Tam İstek Zamanı:</strong>
+                                    <span className="text-gray-800">{log.timestamp}</span>
                                   </div>
                                   <div>
-                                    <strong className="text-gray-900">İstemci IP Adresi:</strong> {log.ip}
+                                    <strong className="text-gray-900 block mb-0.5 font-sans text-xs">İstemci IP Adresi:</strong>
+                                    <span className="text-cyan-700 font-bold bg-cyan-50 px-2 py-0.5 rounded border border-cyan-200 inline-block">
+                                      {cleanIp}
+                                    </span>
                                   </div>
                                   <div>
-                                    <strong className="text-gray-900">İstek Metodu & Yolu:</strong> {log.method} {log.path}
+                                    <strong className="text-gray-900 block mb-0.5 font-sans text-xs">İstek Metodu &amp; Yolu:</strong>
+                                    <span className="text-gray-800">{log.method} {log.path}</span>
                                   </div>
                                   <div>
-                                    <strong className="text-gray-900">Yanıt Durum Kodu:</strong> {log.status} ({log.durationMs}ms)
+                                    <strong className="text-gray-900 block mb-0.5 font-sans text-xs">Yanıt Kodu &amp; Süre:</strong>
+                                    <span className="text-gray-800">{log.status} ({log.durationMs}ms)</span>
                                   </div>
                                   <div>
-                                    <strong className="text-gray-900">Yetkilendirme Modeli:</strong> {log.authType}
+                                    <strong className="text-gray-900 block mb-0.5 font-sans text-xs">Yetkilendirme Modeli:</strong>
+                                    <span className="text-gray-800">{log.authType}</span>
                                   </div>
                                   <div>
-                                    <strong className="text-gray-900">Kayıt Kimliği:</strong> {log.id}
+                                    <strong className="text-gray-900 block mb-0.5 font-sans text-xs">Kayıt Kimliği (ID):</strong>
+                                    <span className="text-gray-500 text-[11px] select-all">{log.id}</span>
                                   </div>
                                 </div>
-                                <div className="pt-2 border-t border-gray-200">
-                                  <strong className="text-gray-900 block mb-1">User-Agent Başlığı:</strong>
-                                  <div className="p-2 bg-gray-50 rounded text-gray-600 text-[11px] break-all">
+                                <div className="pt-2.5 border-t border-gray-100">
+                                  <strong className="text-gray-900 block mb-1 font-sans text-xs">User-Agent Başlığı:</strong>
+                                  <div className="p-2.5 bg-gray-50 rounded border border-gray-200 text-gray-600 text-[11px] break-all select-all">
                                     {log.userAgent}
                                   </div>
                                 </div>
                                 {log.error && (
-                                  <div className="pt-2 border-t border-red-200 text-red-600">
-                                    <strong>Hata Bildirimi:</strong> {log.error}
+                                  <div className="pt-2.5 border-t border-red-100 text-red-600">
+                                    <strong className="font-sans text-xs">Hata Bildirimi:</strong>
+                                    <div className="p-2 bg-red-50 rounded border border-red-200 mt-1 text-red-700 text-[11px]">
+                                      {log.error}
+                                    </div>
                                   </div>
                                 )}
                               </div>
                             </td>
                           </tr>
                         )}
-                      </tbody>
+                      </Fragment>
                     );
                   })
                 )}

@@ -207,7 +207,8 @@ export default function Home() {
           if (!seenLogIdsRef.current.has(l.id)) {
             seenLogIdsRef.current.add(l.id);
             const statusColor = l.status >= 500 ? "stderr" : l.status >= 400 ? "warn" : "stdout";
-            const text = `[HTTP] ${l.method.padEnd(4)} ${l.path} -> ${l.status} (${l.durationMs}ms) [${l.ip}]`;
+            const cleanIp = (l.ip || "127.0.0.1").replace(/^::ffff:/, "").replace(/^::1$/, "127.0.0.1");
+            const text = `[HTTP] ${l.method.padEnd(4)} ${l.path} -> ${l.status} (${l.durationMs}ms) [${cleanIp}]`;
             addTerminalLine(statusColor, text);
           }
         });
