@@ -13,6 +13,8 @@ const publicApiPaths = [
   "/api/updates/check",
   "/api/updates/download",
   "/api/system/telegram-notifier",
+  "/api/system/metrics",
+  "/api/stream/orders",
 ];
 
 export async function proxy(request: NextRequest) {

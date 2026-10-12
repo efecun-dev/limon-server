@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { redis } from "@/lib/redis";
 import { sendTelegramMessage } from "@/lib/telegram";
 import { getTelegramNotifier } from "@/lib/telegram-notifier";
+import { getEventBroadcaster } from "@/lib/event-broadcaster";
 
 export async function POST(req: NextRequest) {
   try {
@@ -60,6 +61,10 @@ export async function POST(req: NextRequest) {
     // b. Önemli durumlarda Telegram Bildirimi (Merkezi motor üzerinden zengin format ve tekilleştirme)
     const notifier = getTelegramNotifier();
     await notifier.handleWebhookOrder(body);
+
+    // c. Tüm yerel programlara (şube ve kasiyer ekranlarına) mikrosaniyede SSE yayını yap
+    const broadcaster = getEventBroadcaster();
+    broadcaster.broadcastOrder(body, packageStatus);
 
     console.log(`[Webhook] Başarıyla işlendi: Sipariş ${orderNumber}, Durum: ${packageStatus}`);
     

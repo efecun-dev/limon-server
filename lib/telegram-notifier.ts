@@ -88,6 +88,7 @@ class TelegramNotifierEngine {
   private processedCancelIds = new Set<string>();
   private processedReviewIds = new Set<string>();
   private processedClaimIds = new Set<string>();
+  private inFlightLocks = new Set<string>();
 
   // Son 50 bildirim logu
   private eventLogs: NotifierEventLog[] = [];
@@ -151,7 +152,79 @@ class TelegramNotifierEngine {
     }
   }
 
-  // Redis ve bellek üzerinden tekilleştirme kontrolü
+  /**
+   * KESİN VE ATOMİK KİLİT MEKANİZMASI (Atomic Deduplication)
+   * 
+   * Sorun: Poller, Webhook ve harici API çağrıları eşzamanlı olarak aynı siparişi yakaladığında
+   * veya asenkron 'await' beklemesi esnasında Telegram'a 2-3 kere mesaj gitmekteydi.
+   * 
+   * Çözüm:
+   * 1. 0ms Senkron Kilitleme: Node.js tek iş parçacıklı event-loop'unda ilk gelen istek
+   *    daha hiçbir 'await' olmadan bellek içi Set'e yazılır. Aynı anda gelen 2. veya 3. istek
+   *    senkron kontrolde anında 'false' alır ve durdurulur.
+   * 2. Dağıtık Redis SET NX Kilidi: Çoklu işlem/yeniden başlatma durumlarında dahi
+   *    Redis SET NX ile 7 günlük atomik kilit alınır.
+   * 3. Çoklu ID Desteği: Hem 'orderNumber' hem de 'id' (Trendyol packageId) aynı anda kilitlenir.
+   */
+  public async acquireLock(
+    typeKey: "order" | "cancel" | "review" | "claim",
+    primaryId: string | number | undefined | null,
+    secondaryId?: string | number | undefined | null
+  ): Promise<boolean> {
+    if (!primaryId && !secondaryId) return false;
+
+    const pId = primaryId ? String(primaryId).trim() : null;
+    const sId = secondaryId ? String(secondaryId).trim() : null;
+
+    const memSet =
+      typeKey === "order"
+        ? this.processedOrderIds
+        : typeKey === "cancel"
+        ? this.processedCancelIds
+        : typeKey === "review"
+        ? this.processedReviewIds
+        : this.processedClaimIds;
+
+    // 1. Senkron Kontrol (0ms gecikme ile aynı anda gelen istekleri hemen süz)
+    if (pId && (memSet.has(pId) || this.inFlightLocks.has(`${typeKey}:${pId}`))) {
+      return false;
+    }
+    if (sId && (memSet.has(sId) || this.inFlightLocks.has(`${typeKey}:${sId}`))) {
+      return false;
+    }
+
+    // 2. Senkron Kilitleme (Hiçbir await olmadan derhal kilitle)
+    if (pId) {
+      memSet.add(pId);
+      this.inFlightLocks.add(`${typeKey}:${pId}`);
+    }
+    if (sId) {
+      memSet.add(sId);
+      this.inFlightLocks.add(`${typeKey}:${sId}`);
+    }
+
+    // 3. Dağıtık Redis Atomik NX Kilidi (Varsa)
+    try {
+      if (pId) {
+        const redisKey = `telegram_notified_${typeKey}_${pId}`;
+        const nxResult = await redis.set(redisKey, "1", "EX", 604800, "NX");
+        if (!nxResult) {
+          // Redis'te zaten mevcut, başka bir süreç göndermiş
+          return false;
+        }
+      }
+      if (sId) {
+        const redisKeySec = `telegram_notified_${typeKey}_${sId}`;
+        await redis.set(redisKeySec, "1", "EX", 604800);
+      }
+    } catch {}
+
+    // Dosyaya yaz
+    this.saveStateToFile();
+    return true;
+  }
+
+  // Geriye dönük uyumluluk için
   private async isAlreadyNotified(typeKey: string, id: string): Promise<boolean> {
     const memSet =
       typeKey === "order"
@@ -164,7 +237,6 @@ class TelegramNotifierEngine {
 
     if (memSet.has(id)) return true;
 
-    // Redis kontrolü (varsa)
     try {
       const redisKey = `telegram_notified_${typeKey}_${id}`;
       const exists = await redis.get(redisKey);
@@ -177,26 +249,8 @@ class TelegramNotifierEngine {
     return false;
   }
 
-  // Bildirildi olarak işaretle
   private async markAsNotified(typeKey: string, id: string): Promise<void> {
-    const memSet =
-      typeKey === "order"
-        ? this.processedOrderIds
-        : typeKey === "cancel"
-        ? this.processedCancelIds
-        : typeKey === "review"
-        ? this.processedReviewIds
-        : this.processedClaimIds;
-
-    memSet.add(id);
-
-    try {
-      const redisKey = `telegram_notified_${typeKey}_${id}`;
-      // 7 gün boyunca sakla
-      await redis.set(redisKey, "1", "EX", 604800);
-    } catch {}
-
-    this.saveStateToFile();
+    await this.acquireLock(typeKey as any, id);
   }
 
   // Başlangıçta mevcut son siparişleri, yorumları ve iadeleri belleğe alarak eski verilerin Telegram'a yağmasını önler
@@ -359,11 +413,7 @@ class TelegramNotifierEngine {
 
         // A. YENİ SİPARİŞ KONTROLÜ (Created)
         if (this.config.notifyNewOrders && pkg.packageStatus === "Created") {
-          const already = await this.isAlreadyNotified("order", orderNumber);
-          if (!already) {
-            await this.markAsNotified("order", orderNumber);
-            await this.sendNewOrderNotification(pkg);
-          }
+          await this.sendNewOrderNotification(pkg);
         }
 
         // B. İPTAL / TEDARİK EDİLEMEDİ SİPARİŞ KONTROLÜ
@@ -371,11 +421,7 @@ class TelegramNotifierEngine {
           this.config.notifyCancelledOrders &&
           (pkg.packageStatus === "Cancelled" || pkg.packageStatus === "UnSupplied")
         ) {
-          const cancelAlready = await this.isAlreadyNotified("cancel", orderNumber);
-          if (!cancelAlready) {
-            await this.markAsNotified("cancel", orderNumber);
-            await this.sendCancelledOrderNotification(pkg);
-          }
+          await this.sendCancelledOrderNotification(pkg);
         }
       }
     } catch (error: any) {
@@ -522,7 +568,23 @@ class TelegramNotifierEngine {
   // 1. Yeni Sipariş Mesajı
   public async sendNewOrderNotification(pkg: any): Promise<boolean> {
     try {
-      const orderNumber = pkg.orderNumber || pkg.id || "Bilinmiyor";
+      const orderNumber = pkg.orderNumber?.toString();
+      const pkgId = pkg.id?.toString();
+      const primaryId = orderNumber || pkgId;
+      const secondaryId = pkgId && pkgId !== primaryId ? pkgId : (orderNumber && orderNumber !== primaryId ? orderNumber : undefined);
+
+      if (!primaryId) {
+        console.warn("[TelegramNotifier] Sipariş numarası bulunamadı, bildirim iptal edildi.");
+        return false;
+      }
+
+      // KESİN TEKİLLEŞTİRME KİLİDİ: Mükerrer bildirimleri %100 engelle
+      const canProceed = await this.acquireLock("order", primaryId, secondaryId);
+      if (!canProceed) {
+        console.log(`[TelegramNotifier] Sipariş #${primaryId} zaten bildirildi, mükerrer bildirim engellendi.`);
+        return true;
+      }
+
       const storeId = pkg.storeId?.toString();
       const branchName = (storeId && BRANCHES[storeId]) ? BRANCHES[storeId] : (storeId || "Bilinmiyor");
       const customer = pkg.customer || {};
@@ -603,7 +665,20 @@ class TelegramNotifierEngine {
   // 2. İptal Sipariş Mesajı
   public async sendCancelledOrderNotification(pkg: any): Promise<boolean> {
     try {
-      const orderNumber = pkg.orderNumber || pkg.id || "Bilinmiyor";
+      const orderNumber = pkg.orderNumber?.toString();
+      const pkgId = pkg.id?.toString();
+      const primaryId = orderNumber || pkgId;
+      const secondaryId = pkgId && pkgId !== primaryId ? pkgId : (orderNumber && orderNumber !== primaryId ? orderNumber : undefined);
+
+      if (!primaryId) return false;
+
+      // KESİN TEKİLLEŞTİRME KİLİDİ: Mükerrer iptal bildirimini engelle
+      const canProceed = await this.acquireLock("cancel", primaryId, secondaryId);
+      if (!canProceed) {
+        console.log(`[TelegramNotifier] İptal Sipariş #${primaryId} zaten bildirildi, mükerrer bildirim engellendi.`);
+        return true;
+      }
+
       const storeId = pkg.storeId?.toString();
       const branchName = (storeId && BRANCHES[storeId]) ? BRANCHES[storeId] : (storeId || "Bilinmiyor");
       const customer = pkg.customer || {};
@@ -646,6 +721,16 @@ class TelegramNotifierEngine {
   // 3. Yorum Bildirimi Mesajı
   public async sendReviewNotification(review: any, branchName: string): Promise<boolean> {
     try {
+      const revId = (review.reviewId || review.id)?.toString();
+      if (!revId) return false;
+
+      // KESİN TEKİLLEŞTİRME KİLİDİ: Mükerrer yorum bildirimini engelle
+      const canProceed = await this.acquireLock("review", revId);
+      if (!canProceed) {
+        console.log(`[TelegramNotifier] Yorum #${revId} zaten bildirildi, mükerrer bildirim engellendi.`);
+        return true;
+      }
+
       const avg = review.rating?.averageScore ?? review.rating?.deliveryScore ?? 5;
       const quality = review.rating?.qualityScore ?? "-";
       const delivery = review.rating?.deliveryScore ?? "-";
@@ -687,6 +772,16 @@ class TelegramNotifierEngine {
   // 4. İade Talebi Bildirimi Mesajı
   public async sendClaimNotification(claim: any): Promise<boolean> {
     try {
+      const claimId = (claim.id || claim.claimId || claim.orderNumber)?.toString();
+      if (!claimId) return false;
+
+      // KESİN TEKİLLEŞTİRME KİLİDİ: Mükerrer iade bildirimini engelle
+      const canProceed = await this.acquireLock("claim", claimId);
+      if (!canProceed) {
+        console.log(`[TelegramNotifier] İade Talebi #${claimId} zaten bildirildi, mükerrer bildirim engellendi.`);
+        return true;
+      }
+
       const orderNumber = claim.orderNumber || "Bilinmiyor";
       const customerName = `${claim.customerFirstName || ""} ${claim.customerLastName || ""}`.trim() || "Müşteri";
       const storeId = claim.storeId?.toString();
@@ -735,23 +830,13 @@ class TelegramNotifierEngine {
 
   // Webhook'tan gelen siparişi anında işleme metodu
   public async handleWebhookOrder(body: any): Promise<boolean> {
-    if (!body || !body.orderNumber) return false;
+    if (!body) return false;
 
-    const orderNumber = body.orderNumber.toString();
     const status = body.packageStatus;
-
     if (status === "Created") {
-      const already = await this.isAlreadyNotified("order", orderNumber);
-      if (!already) {
-        await this.markAsNotified("order", orderNumber);
-        return await this.sendNewOrderNotification(body);
-      }
+      return await this.sendNewOrderNotification(body);
     } else if (status === "Cancelled" || status === "UnSupplied") {
-      const already = await this.isAlreadyNotified("cancel", orderNumber);
-      if (!already) {
-        await this.markAsNotified("cancel", orderNumber);
-        return await this.sendCancelledOrderNotification(body);
-      }
+      return await this.sendCancelledOrderNotification(body);
     }
     return true;
   }

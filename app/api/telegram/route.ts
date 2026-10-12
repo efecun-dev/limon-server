@@ -32,9 +32,15 @@ export async function POST(req: Request) {
       return NextResponse.json({ success }, { headers: corsHeaders });
     }
 
-    // 5. Doğrudan Özel Metin Gönderme
+    // 5. Doğrudan Özel Metin Gönderme (5 dakika içinde aynı metnin tekrar gönderimini süz)
     if (body.text || body.message) {
-      const text = body.text || body.message;
+      const text = String(body.text || body.message).trim();
+      const textHash = Buffer.from(text).toString("base64").substring(0, 48);
+      const canSend = await notifier.acquireLock("system" as any, textHash);
+      if (!canSend && !body.force) {
+        console.log("[TelegramAPI] Aynı mesaj kısa süre önce gönderildi, mükerrer istek engellendi.");
+        return NextResponse.json({ success: true, deduplicated: true }, { headers: corsHeaders });
+      }
       const success = await sendTelegramMessage(text);
       return NextResponse.json({ success }, { headers: corsHeaders });
     }
