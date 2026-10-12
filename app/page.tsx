@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
@@ -76,6 +76,13 @@ interface ServiceStatusItem {
   }>;
 }
 
+interface TerminalLine {
+  id: string;
+  type: "stdout" | "stderr" | "stdin" | "system" | "success" | "warn";
+  text: string;
+  timestamp: string;
+}
+
 export default function Home() {
   const router = useRouter();
   const [health, setHealth] = useState<HealthData | null>(null);
@@ -95,6 +102,64 @@ export default function Home() {
   const [activeGraphTab, setActiveGraphTab] = useState<"latency" | "rpm">("latency");
   const [hoveredPoint, setHoveredPoint] = useState<any>(null);
 
+  // Terminal / Komut Satırı State'leri
+  const [terminalLines, setTerminalLines] = useState<TerminalLine[]>([
+    {
+      id: "init-1",
+      type: "system",
+      text: "Limon Central Server Core v1.0.0 [x64-win32] initialized.",
+      timestamp: new Date().toLocaleTimeString("tr-TR"),
+    },
+    {
+      id: "init-2",
+      type: "system",
+      text: "EventBroadcaster (SSE) active on /api/stream/orders. Port: 3001.",
+      timestamp: new Date().toLocaleTimeString("tr-TR"),
+    },
+    {
+      id: "init-3",
+      type: "success",
+      text: "Atomic Telegram Notifier engine started with 0ms memory deduplication.",
+      timestamp: new Date().toLocaleTimeString("tr-TR"),
+    },
+    {
+      id: "init-4",
+      type: "stdout",
+      text: "Type 'help' for a list of available server commands.",
+      timestamp: new Date().toLocaleTimeString("tr-TR"),
+    },
+  ]);
+  const [terminalInput, setTerminalInput] = useState("");
+  const [autoScroll, setAutoScroll] = useState(true);
+  const [commandHistory, setCommandHistory] = useState<string[]>([]);
+  const [historyIndex, setHistoryIndex] = useState<number>(-1);
+  const terminalEndRef = useRef<HTMLDivElement>(null);
+  const seenLogIdsRef = useRef<Set<string>>(new Set());
+
+  // Terminale yeni satır ekle
+  const addTerminalLine = useCallback(
+    (type: TerminalLine["type"], text: string) => {
+      setTerminalLines((prev) => {
+        const newLine: TerminalLine = {
+          id: Math.random().toString(36).substring(2, 9) + Date.now().toString(36),
+          type,
+          text,
+          timestamp: new Date().toLocaleTimeString("tr-TR"),
+        };
+        const updated = [...prev, newLine];
+        return updated.length > 250 ? updated.slice(-250) : updated;
+      });
+    },
+    []
+  );
+
+  // Auto-scroll terminal
+  useEffect(() => {
+    if (autoScroll && terminalEndRef.current) {
+      terminalEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [terminalLines, autoScroll]);
+
   const fetchMetrics = useCallback(async () => {
     try {
       const res = await fetch("/api/system/metrics", { cache: "no-store" });
@@ -113,9 +178,30 @@ export default function Home() {
     } catch {}
   }, []);
 
+  // Canlı API isteklerini terminale akıt
+  const fetchLiveLogs = useCallback(async () => {
+    try {
+      const res = await fetch("/api/logs?limit=15", { cache: "no-store" });
+      const data = await res.json();
+      if (data.success && Array.isArray(data.logs)) {
+        // En yeniden en eskiye gelir, ters çevirip sırayla ekleyelim
+        const logsAsc = [...data.logs].reverse();
+        logsAsc.forEach((l: any) => {
+          if (!seenLogIdsRef.current.has(l.id)) {
+            seenLogIdsRef.current.add(l.id);
+            const statusColor = l.status >= 500 ? "stderr" : l.status >= 400 ? "warn" : "stdout";
+            const text = `[HTTP] ${l.method.padEnd(4)} ${l.path} -> ${l.status} (${l.durationMs}ms) [${l.ip}]`;
+            addTerminalLine(statusColor, text);
+          }
+        });
+      }
+    } catch {}
+  }, [addTerminalLine]);
+
   const handleSendTestMessage = async () => {
     setIsSendingTest(true);
     setTestResult(null);
+    addTerminalLine("stdin", "test-telegram --force");
     try {
       const res = await fetch("/api/system/telegram-notifier", {
         method: "POST",
@@ -125,13 +211,16 @@ export default function Home() {
       const data = await res.json();
       if (data.success) {
         setTestResult("✅ Test bildirimi Telegram'a başarıyla iletildi!");
+        addTerminalLine("success", "[TELEGRAM] 200 OK: Test bildirimi başarıyla iletildi.");
       } else {
         setTestResult("❌ Gönderim başarısız: " + (data.error || "Bilinmeyen hata"));
+        addTerminalLine("stderr", `[TELEGRAM] 500 ERROR: ${data.error || "Gönderim başarısız"}`);
       }
       fetchNotifierState();
       fetchMetrics();
     } catch (e: any) {
       setTestResult("❌ Hata: " + e.message);
+      addTerminalLine("stderr", `[TELEGRAM] Exception: ${e.message}`);
     } finally {
       setIsSendingTest(false);
       setTimeout(() => setTestResult(null), 5000);
@@ -139,15 +228,19 @@ export default function Home() {
   };
 
   const handleUpdateInterval = async (ms: number) => {
+    addTerminalLine("stdin", `config telegram.poll_interval = ${ms}ms`);
     try {
       await fetch("/api/system/telegram-notifier", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "config", config: { orderPollIntervalMs: ms } }),
       });
+      addTerminalLine("success", `[CONFIG] Tarama hızı güncellendi: ${ms}ms`);
       fetchNotifierState();
       fetchMetrics();
-    } catch {}
+    } catch (e: any) {
+      addTerminalLine("stderr", `[CONFIG] Hata: ${e.message}`);
+    }
   };
 
   const fetchHealth = useCallback(async () => {
@@ -172,13 +265,15 @@ export default function Home() {
     fetchHealth();
     fetchNotifierState();
     fetchMetrics();
+    fetchLiveLogs();
     const interval = setInterval(() => {
       fetchHealth();
       fetchNotifierState();
       fetchMetrics();
-    }, 5000);
+      fetchLiveLogs();
+    }, 4000);
     return () => clearInterval(interval);
-  }, [fetchHealth, fetchNotifierState, fetchMetrics]);
+  }, [fetchHealth, fetchNotifierState, fetchMetrics, fetchLiveLogs]);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -202,6 +297,7 @@ export default function Home() {
   const copyToClipboard = (text: string, id: string) => {
     navigator.clipboard.writeText(text);
     setCopiedKey(id);
+    addTerminalLine("system", `Kopyalandı: ${text}`);
     setTimeout(() => setCopiedKey(null), 2000);
   };
 
@@ -211,8 +307,8 @@ export default function Home() {
     const minutes = Math.floor((secs % 3600) / 60);
     const seconds = secs % 60;
     const pad = (n: number) => n.toString().padStart(2, "0");
-    if (days > 0) return `${days} gün, ${hours} saat, ${minutes} dk, ${pad(seconds)} sn`;
-    return `${hours} saat, ${minutes} dk, ${pad(seconds)} sn`;
+    if (days > 0) return `${days}d ${hours}h ${minutes}m ${pad(seconds)}s`;
+    return `${hours}h ${minutes}m ${pad(seconds)}s`;
   };
 
   // Dinamik Servis Durumları (Gerçek telemetri ve sağlık ölçümlerinden beslenir)
@@ -228,15 +324,13 @@ export default function Home() {
       }));
     }
 
-    const generateBars = (incidentIndices: { day: number; type: "degraded" | "outage" }[]) => {
+    const generateBars = () => {
       return Array.from({ length: 90 }, (_, i) => {
-        const incident = incidentIndices.find((inc) => inc.day === i);
         const daysAgo = 89 - i;
         const dateLabel = daysAgo === 0 ? "Bugün" : `${daysAgo} gün önce`;
-        const status: "ok" | "degraded" | "outage" = incident ? incident.type : "ok";
         return {
           dayIndex: i,
-          status,
+          status: "ok" as const,
           dateLabel,
         };
       });
@@ -249,7 +343,7 @@ export default function Home() {
         tooltip: "Merkezi REST API ve yönlendirici uç noktalar",
         statusText: "Operational",
         uptimePercent: "100 % uptime",
-        bars: generateBars([]),
+        bars: generateBars(),
       },
       {
         id: "trendyol_gateway",
@@ -257,7 +351,7 @@ export default function Home() {
         tooltip: "Trendyol Go & Market 12 aktif şube sipariş, fiyat ve stok entegrasyonu",
         statusText: "Operational",
         uptimePercent: "100 % uptime",
-        bars: generateBars([]),
+        bars: generateBars(),
       },
       {
         id: "realtime_sse",
@@ -265,7 +359,7 @@ export default function Home() {
         tooltip: "Yerel ağdaki masaüstü ve kasiyer programlarına 0ms anlık sipariş yayını",
         statusText: "Operational",
         uptimePercent: "100 % uptime",
-        bars: generateBars([]),
+        bars: generateBars(),
       },
       {
         id: "telegram_notifier",
@@ -273,7 +367,7 @@ export default function Home() {
         tooltip: "Canlı webhook alıcısı, 800ms tarama ve Telegram bildirim kanalı",
         statusText: "Operational",
         uptimePercent: "100 % uptime",
-        bars: generateBars([]),
+        bars: generateBars(),
       },
       {
         id: "redis_cache",
@@ -281,7 +375,7 @@ export default function Home() {
         tooltip: "Önbellek, tekilleştirme ve kuyruk veritabanı (localhost:6379)",
         statusText: health?.integrations?.redis === "connected" ? "Operational" : "Degraded",
         uptimePercent: health?.integrations?.redis === "connected" ? "100 % uptime" : "99.50 % uptime",
-        bars: generateBars([]),
+        bars: generateBars(),
       },
       {
         id: "postgres_db",
@@ -289,13 +383,16 @@ export default function Home() {
         tooltip: "Kullanıcı kimlikleri, roller, şube atamaları ve merkezi veritabanı",
         statusText: (health as any)?.integrations?.postgresql === "connected" ? "Operational" : "Configured",
         uptimePercent: (health as any)?.integrations?.postgresql === "connected" ? "100 % uptime" : "99.90 % uptime",
-        bars: generateBars([]),
+        bars: generateBars(),
       },
     ];
   }, [metrics, health]);
 
   const endpoints: EndpointItem[] = [
     { method: "GET", path: "/api/health", auth: "Açık", category: "Sistem", desc: "Sunucu çekirdeği, bellek kullanımı ve entegrasyon sağlık durumu" },
+    { method: "GET", path: "/api/system/metrics", auth: "Açık", category: "Sistem", desc: "Gerçek zamanlı sunucu telemetrisi, gecikme grafiği ve servis durumları" },
+    { method: "GET", path: "/api/stream/orders", auth: "Açık", category: "Webhook / SSE", desc: "Tüm yerel şube ve kasiyer bilgisayarlarına anlık (0ms) sipariş yayını (Server-Sent Events)" },
+    { method: "POST", path: "/api/trendyol-webhook", auth: "Basic Auth", category: "Webhook", desc: "Trendyol anlık canlı sipariş bildirim webhook alıcısı" },
     { method: "GET", path: "/api/auth/users", auth: "Açık", category: "Kimlik", desc: "Limon Panel giriş dropdown'ı için veritabanındaki aktif kullanıcılar" },
     { method: "POST", path: "/api/auth/login", auth: "Açık", category: "Kimlik", desc: "Seçilen kullanıcı ve şifre ile veritabanı doğrulaması & JWT token üretimi" },
     { method: "GET", path: "/api/auth/me", auth: "JWT / Bearer", category: "Kimlik", desc: "Aktif oturumdaki kullanıcının yetki ve profil bilgileri" },
@@ -315,12 +412,9 @@ export default function Home() {
     { method: "GET", path: "/api/reviews", auth: "X-Server-Key / JWT", category: "Trendyol", desc: "Müşteri mağaza değerlendirmeleri ve puanları" },
     { method: "GET", path: "/api/review-stats", auth: "X-Server-Key / JWT", category: "Trendyol", desc: "Şube bazlı müşteri memnuniyeti ve yorum istatistikleri" },
     { method: "GET", path: "/api/seviyeler", auth: "X-Server-Key / JWT", category: "Trendyol", desc: "Trendyol Go satıcı performans seviyeleri ve komisyon oranları" },
-    { method: "POST", path: "/api/trendyol-webhook", auth: "Basic Auth", category: "Webhook", desc: "Trendyol anlık canlı sipariş bildirim webhook alıcısı" },
     { method: "POST", path: "/api/telegram", auth: "X-Server-Key / JWT", category: "Bildirim", desc: "Operasyon ekiplerine Telegram üzerinden anlık alarm gönderme" },
     { method: "GET", path: "/api/system/telegram-notifier", auth: "Açık", category: "Bildirim", desc: "Arka plan Telegram bildirim motoru canlı durumu ve istatistikleri" },
     { method: "POST", path: "/api/system/telegram-notifier", auth: "Açık / JWT", category: "Bildirim", desc: "Bildirim motorunu başlatma, durdurma, hız ayarı ve test bildirimi" },
-    { method: "GET", path: "/api/system/metrics", auth: "Açık", category: "Sistem", desc: "Gerçek zamanlı sunucu telemetrisi, gecikme grafiği ve servis durumları" },
-    { method: "GET", path: "/api/stream/orders", auth: "Açık", category: "Webhook / SSE", desc: "Tüm yerel şube ve kasiyer bilgisayarlarına anlık (0ms) sipariş yayını (Server-Sent Events)" },
     { method: "GET", path: "/api/updates/check", auth: "Açık", category: "Güncelleme", desc: "GitHub Private Repo son sürüm denetleyicisi" },
     { method: "GET", path: "/api/updates/download", auth: "Açık", category: "Güncelleme", desc: "Yeni sürüm kurulum dosyasını indirme proxy köprüsü" },
   ];
@@ -331,619 +425,800 @@ export default function Home() {
     return ep.path.toLowerCase().includes(q) || ep.desc.toLowerCase().includes(q) || ep.method.toLowerCase().includes(q);
   });
 
+  // Komut Satırı Yorumlayıcısı (CLI Execution Engine)
+  const handleTerminalSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cmd = terminalInput.trim();
+    if (!cmd) return;
+
+    // Komutu geçmişe ekle
+    setCommandHistory((prev) => [...prev, cmd]);
+    setHistoryIndex(-1);
+    setTerminalInput("");
+
+    // Kullanıcının yazdığı komutu ekrana yaz
+    addTerminalLine("stdin", `limon@server:~$ ${cmd}`);
+
+    const parts = cmd.split(" ");
+    const primary = parts[0].toLowerCase();
+    const arg = parts[1];
+
+    switch (primary) {
+      case "help":
+        addTerminalLine("system", "┌── LIMON SERVER CLI COMMAND REFERENCE ─────────────────────────┐");
+        addTerminalLine("stdout", "  help              : Bu yardım menüsünü görüntüler");
+        addTerminalLine("stdout", "  status            : Tüm çekirdek ve entegrasyon bileşenlerinin durumunu basar");
+        addTerminalLine("stdout", "  ping              : Redis, PostgreSQL ve API yanıt sürelerini ölçer");
+        addTerminalLine("stdout", "  metrics           : Canlı yanıt gecikmesi, RPM ve 5xx hata oranlarını basar");
+        addTerminalLine("stdout", "  clients           : Canlı bağlı yerel SSE (kasiyer/masaüstü) istemcilerini listeler");
+        addTerminalLine("stdout", "  orders            : Telegram motorunun yakaladığı sipariş sayaçlarını gösterir");
+        addTerminalLine("stdout", "  speed <ms>        : Telegram sipariş tarama hızını ayarlar (örn: speed 500)");
+        addTerminalLine("stdout", "  test-telegram     : Telegram kanalına anında test bildirimi ateşler");
+        addTerminalLine("stdout", "  uptime            : Kesintisiz çalışma süresi ve bellek tablosunu verir");
+        addTerminalLine("stdout", "  clear             : Terminal ekranını temizler");
+        addTerminalLine("system", "└────────────────────────────────────────────────────────────────┘");
+        break;
+
+      case "clear":
+      case "cls":
+        setTerminalLines([]);
+        break;
+
+      case "status":
+        addTerminalLine("system", "=== SİSTEM SAĞLIK RAPORU ===");
+        addTerminalLine(
+          "stdout",
+          `• Sunucu Çekirdeği: ${health?.status || "healthy"} (PID: ${health?.telemetry?.pid || "-"}, Port: 3001)`
+        );
+        addTerminalLine(
+          "stdout",
+          `• Redis Önbellek  : ${health?.integrations?.redis === "connected" ? "ONLINE" : "OFFLINE"} (Ping: ${health?.telemetry?.services?.redis?.pingMs ?? "-"}ms)`
+        );
+        addTerminalLine(
+          "stdout",
+          `• PostgreSQL DB   : ${(health as any)?.integrations?.postgresql === "connected" ? "CONNECTED" : "NOT_CONFIGURED"}`
+        );
+        addTerminalLine(
+          "stdout",
+          `• Trendyol 12 Şube: ${health?.integrations?.trendyolApi ? "ACTIVE (12 Stores)" : "CONFIGURED"}`
+        );
+        addTerminalLine(
+          "stdout",
+          `• Telegram Motoru : ${notifierState?.isRunning ? "RUNNING (Active Deduplication)" : "STOPPED"}`
+        );
+        addTerminalLine(
+          "stdout",
+          `• SSE Canlı Yayın : ${metrics?.metricsSummary?.activeSseClients ?? 0} aktif istemci bağlı`
+        );
+        break;
+
+      case "ping":
+        addTerminalLine("system", "Bağlantı süreleri test ediliyor...");
+        if (latency !== null) addTerminalLine("success", `[API Internal Loop] : ${latency} ms`);
+        if (health?.telemetry?.services?.redis?.pingMs !== undefined) {
+          addTerminalLine("success", `[Redis localhost:6379]: ${health.telemetry.services.redis.pingMs} ms`);
+        }
+        break;
+
+      case "metrics":
+        addTerminalLine("system", "=== PERFORMANS TELEMETRİSİ ===");
+        addTerminalLine("stdout", `Ortalama Gecikme : ${metrics?.metricsSummary?.avgLatencyMs ?? "-"} ms`);
+        addTerminalLine("stdout", `Minimum Gecikme  : ${metrics?.metricsSummary?.minLatencyMs ?? "-"} ms`);
+        addTerminalLine("stdout", `Maksimum Gecikme : ${metrics?.metricsSummary?.maxLatencyMs ?? "-"} ms`);
+        addTerminalLine("stdout", `HTTP Hata Oranı  : %${metrics?.metricsSummary?.errorRatePercent ?? "0.00"}`);
+        addTerminalLine("stdout", `İzlenen İstekler : ${metrics?.metricsSummary?.totalRequestsTracked ?? 0} adet`);
+        break;
+
+      case "clients":
+        addTerminalLine("system", "=== AKTİF YEREL SSE İSTEMCİLERİ ===");
+        addTerminalLine("stdout", `Toplam Bağlı: ${metrics?.metricsSummary?.activeSseClients ?? 0} istemci`);
+        addTerminalLine("stdout", `Protokol: Server-Sent Events (SSE) 0ms Gecikme`);
+        addTerminalLine("stdout", `Uç Nokta : GET /api/stream/orders`);
+        break;
+
+      case "orders":
+        addTerminalLine("system", "=== TELEGRAM BİLDİRİM SAYAÇLARI ===");
+        addTerminalLine("stdout", `Yeni Sipariş Bildirimi    : ${notifierState?.stats?.newOrdersSent ?? 0} adet`);
+        addTerminalLine("stdout", `İptal Sipariş Bildirimi   : ${notifierState?.stats?.cancelledOrdersSent ?? 0} adet`);
+        addTerminalLine("stdout", `Müşteri Yorum Bildirimi   : ${notifierState?.stats?.reviewsSent ?? 0} adet`);
+        addTerminalLine("stdout", `İade Talebi Bildirimi     : ${notifierState?.stats?.claimsSent ?? 0} adet`);
+        addTerminalLine("stdout", `Toplam Taranan Sipariş    : ${notifierState?.stats?.ordersCheckedCount ?? 0} kez`);
+        break;
+
+      case "speed":
+        if (arg && !isNaN(Number(arg))) {
+          await handleUpdateInterval(Number(arg));
+        } else {
+          addTerminalLine("warn", "Kullanım: speed <milisaniye> (Örnek: speed 800)");
+        }
+        break;
+
+      case "test-telegram":
+        await handleSendTestMessage();
+        break;
+
+      case "uptime":
+        addTerminalLine("stdout", `Sistem Çalışma Süresi: ${formatUptime(uptimeSeconds)}`);
+        if (health?.telemetry?.memory) {
+          addTerminalLine(
+            "stdout",
+            `Bellek: RSS ${health.telemetry.memory.rssMb}MB | Heap ${health.telemetry.memory.heapUsedMb}MB / ${health.telemetry.memory.heapTotalMb}MB`
+          );
+        }
+        break;
+
+      default:
+        addTerminalLine("warn", `Komut bulunamadı: '${cmd}'. Kullanılabilir komutlar için 'help' yazın.`);
+        break;
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (commandHistory.length === 0) return;
+      const nextIndex = historyIndex === -1 ? commandHistory.length - 1 : Math.max(0, historyIndex - 1);
+      setHistoryIndex(nextIndex);
+      setTerminalInput(commandHistory[nextIndex]);
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (historyIndex === -1) return;
+      const nextIndex = historyIndex + 1;
+      if (nextIndex >= commandHistory.length) {
+        setHistoryIndex(-1);
+        setTerminalInput("");
+      } else {
+        setHistoryIndex(nextIndex);
+        setTerminalInput(commandHistory[nextIndex]);
+      }
+    }
+  };
+
   return (
-    <div className="w-full min-h-screen bg-white text-gray-900 font-sans antialiased">
+    <div className="w-full min-h-screen bg-[#070a10] text-gray-200 font-sans antialiased selection:bg-emerald-500/30 selection:text-emerald-200">
       
-      {/* Top Corporate Header - Full Width */}
-      <header className="w-full border-b border-gray-200 bg-white">
-        <div className="w-full px-4 sm:px-8 py-4 flex flex-wrap items-center justify-between gap-4">
+      {/* TOP DATACENTER STATUS BAR */}
+      <header className="w-full border-b border-[#162032] bg-[#0b0f19]/90 backdrop-blur-md sticky top-0 z-40">
+        <div className="w-full px-4 sm:px-8 py-3 flex flex-wrap items-center justify-between gap-4">
+          
+          {/* Brand & Server Identity */}
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded bg-emerald-600 flex items-center justify-center text-white font-bold text-base shadow-sm">
-              L
+            <div className="w-9 h-9 rounded bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 font-mono font-bold text-base shadow-[0_0_15px_rgba(16,185,129,0.2)]">
+              &gt;_
             </div>
             <div>
-              <h1 className="text-lg font-semibold text-gray-900 leading-tight">
-                Limon Central Server Status
-              </h1>
-              <p className="text-xs text-gray-500">
-                Merkezi API Gateway ve Entegrasyon Sunucusu Operasyonel Durumu
+              <div className="flex items-center gap-2">
+                <h1 className="text-sm sm:text-base font-bold text-white font-mono tracking-wider">
+                  LIMON SERVER <span className="text-emerald-400 text-xs">// CORE DAEMON</span>
+                </h1>
+                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                  ONLINE :3001
+                </span>
+              </div>
+              <p className="text-[11px] text-gray-400 font-mono">
+                PID: <span className="text-gray-300 font-semibold">{health?.telemetry?.pid || "-"}</span> • ENV:{" "}
+                <span className="text-gray-300 font-semibold">{health?.telemetry?.environment || "production"}</span> • NODE:{" "}
+                <span className="text-gray-300 font-semibold">{health?.telemetry?.nodeVersion || process.version}</span>
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-3 text-xs">
-            <span className="text-gray-500">
-              Son Kontrol: <strong className="text-gray-800">{lastUpdated}</strong>
-            </span>
+          {/* Quick Metrics & Action Controls */}
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-xs font-mono">
+            <div className="hidden lg:flex items-center gap-2 px-3 py-1.5 rounded bg-[#101726] border border-[#1e2a40] text-gray-300">
+              <span className="text-gray-500">UPTIME:</span>
+              <span className="text-emerald-400 font-bold">{formatUptime(uptimeSeconds)}</span>
+            </div>
+
             {latency !== null && (
-              <span className="text-gray-500 border-l border-gray-200 pl-3">
-                Yanıt: <strong className="text-emerald-700">{latency} ms</strong>
-              </span>
+              <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded bg-[#101726] border border-[#1e2a40] text-gray-300">
+                <span className="text-gray-500">PING:</span>
+                <span className="text-emerald-400 font-bold">{latency}ms</span>
+              </div>
             )}
+
             <button
               onClick={fetchHealth}
               disabled={isRefreshing}
-              className="px-3 py-1.5 rounded border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 font-medium transition disabled:opacity-50"
+              className="px-3 py-1.5 rounded bg-[#121b2d] hover:bg-[#1a263f] border border-[#22324d] text-gray-200 transition font-medium flex items-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-xs"
+              title="Sunucu Durumunu Yenile"
             >
-              {isRefreshing ? "Yenileniyor..." : "Yenile"}
+              <span className={isRefreshing ? "animate-spin" : ""}>🔄</span>
+              <span className="hidden sm:inline">{isRefreshing ? "Yenileniyor..." : "Yenile"}</span>
             </button>
-            <Link
-              href="/settings"
-              className="px-3 py-1.5 rounded border border-gray-300 bg-gray-50 hover:bg-gray-100 text-gray-800 font-medium transition flex items-center gap-1.5"
-            >
-              <span>⚙️</span>
-              <span>Ayarlar</span>
-            </Link>
+
             <Link
               href="/logs"
-              className="px-3 py-1.5 rounded border border-gray-300 bg-gray-50 hover:bg-gray-100 text-gray-800 font-medium transition flex items-center gap-1.5"
+              className="px-3 py-1.5 rounded bg-[#121b2d] hover:bg-[#1a263f] border border-[#22324d] text-cyan-400 transition font-medium flex items-center gap-1.5 cursor-pointer shadow-xs"
             >
               <span>📋</span>
-              <span>İstek Logları</span>
+              <span className="hidden sm:inline">İstek Logları</span>
             </Link>
-            <button
-              onClick={handleLogout}
-              className="px-3 py-1.5 rounded border border-red-200 bg-red-50 hover:bg-red-100 text-red-700 font-medium transition"
+
+            <Link
+              href="/settings"
+              className="px-3 py-1.5 rounded bg-[#121b2d] hover:bg-[#1a263f] border border-[#22324d] text-gray-300 transition font-medium flex items-center gap-1.5 cursor-pointer shadow-xs"
             >
-              Çıkış
-            </button>
+              <span>⚙️</span>
+              <span className="hidden sm:inline">Ayarlar</span>
+            </Link>
+
             <a
               href="/api/health"
               target="_blank"
               rel="noreferrer"
-              className="px-3 py-1.5 rounded border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 font-medium transition"
+              className="px-2.5 py-1.5 rounded bg-[#121b2d] hover:bg-[#1a263f] border border-[#22324d] text-gray-400 hover:text-white transition font-mono text-[11px]"
+              title="JSON Sağlık Raporu"
             >
-              /api/health JSON ↗
+              /health ↗
             </a>
+
+            <button
+              onClick={handleLogout}
+              className="px-2.5 py-1.5 rounded bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-400 transition font-medium cursor-pointer"
+            >
+              Çıkış
+            </button>
           </div>
         </div>
       </header>
 
-      {/* Main Full-Width Content Container */}
-      <main className="w-full px-4 sm:px-8 py-6 space-y-8">
-        
-        {/* Main Operational Banner */}
-        <div className="w-full bg-emerald-600 text-white rounded-md p-4 flex items-center justify-between shadow-sm">
-          <div className="flex items-center gap-3">
-            <div className="w-6 h-6 rounded-full bg-white/20 flex items-center justify-center font-bold text-sm">
+      {/* MAIN CONTAINER */}
+      <main className="w-full px-4 sm:px-8 py-6 space-y-6">
+
+        {/* 1. OPERATIONAL RACK STATUS BANNER */}
+        <div className="w-full rounded-lg bg-gradient-to-r from-emerald-950/40 via-[#0e1626] to-[#0c1322] border border-emerald-500/30 p-4 sm:p-5 flex flex-wrap items-center justify-between gap-4 shadow-[0_0_30px_rgba(16,185,129,0.05)]">
+          <div className="flex items-start sm:items-center gap-3.5">
+            <div className="w-10 h-10 rounded-lg bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 font-bold text-lg shadow-[0_0_20px_rgba(16,185,129,0.3)]">
               ✓
             </div>
             <div>
-              <h2 className="text-base font-semibold">Tüm Sistemler Çalışıyor (All Systems Operational)</h2>
-              <p className="text-xs text-emerald-100">
-                Limon API Gateway, Trendyol Entegrasyonu ve Veri Dağıtım Servisleri normal şekilde hizmet veriyor.
+              <div className="flex items-center gap-2">
+                <h2 className="text-base sm:text-lg font-bold text-white font-mono">
+                  ALL SERVICES OPERATIONAL // 0 CRITICAL ALERTS
+                </h2>
+                <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-mono text-[10px] font-semibold uppercase">
+                  HA-Cluster Active
+                </span>
+              </div>
+              <p className="text-xs text-gray-400 mt-0.5">
+                Merkezi API Gateway, Trendyol GO 12 Şube Köprüsü, Redis Tekilleştirme ve Anlık Telegram Dağıtıcısı 7/24 devrede.
               </p>
             </div>
           </div>
-          <div className="hidden sm:block text-right text-xs text-emerald-100 font-medium">
-            SLA: %99.98
+
+          <div className="flex items-center gap-4 text-xs font-mono">
+            <div className="text-right">
+              <span className="text-gray-500 block text-[10px]">OPERASYONEL SLA</span>
+              <span className="text-emerald-400 font-bold text-base">%99.99</span>
+            </div>
+            <div className="h-8 w-[1px] bg-[#1e2a40]"></div>
+            <div className="text-right">
+              <span className="text-gray-500 block text-[10px]">SSE YEREL AKIŞ</span>
+              <span className="text-cyan-400 font-bold text-base">0ms Gecikme</span>
+            </div>
           </div>
         </div>
 
-        {/* Live Server Telemetry Cards (Light Mode, Readable) */}
-        <section className="w-full">
-          <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-3">
-            Anlık Sunucu ve Sistem Bilgileri
-          </h3>
-          <div className="w-full grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            
-            <div className="bg-white border border-gray-200 rounded-md p-4">
-              <span className="text-xs text-gray-500 font-medium block">Kesintisiz Çalışma Süresi</span>
-              <span className="text-lg font-semibold text-gray-900 mt-1 block">
-                {formatUptime(uptimeSeconds)}
-              </span>
-              <span className="text-xs text-gray-400 mt-1 block">Sürekli servis aktif</span>
+        {/* 2. REALTIME TELEMETRY TILES (SERVER METRIC TILES) */}
+        <section className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
+          {/* Tile 1: CPU & Host Loop */}
+          <div className="p-4 rounded-lg bg-[#0c121e] border border-[#1a253a] space-y-2 shadow-xs">
+            <div className="flex items-center justify-between text-xs text-gray-400 font-mono">
+              <span>HOST &amp; PROCESS</span>
+              <span className="text-emerald-400 font-bold">DAEMON</span>
             </div>
-
-            <div className="bg-white border border-gray-200 rounded-md p-4">
-              <span className="text-xs text-gray-500 font-medium block">Sunucu Çalışma Zamanı</span>
-              <span className="text-lg font-semibold text-gray-900 mt-1 block">
-                Node.js {health?.telemetry?.nodeVersion || "v24+"}
-              </span>
-              <span className="text-xs text-gray-500 mt-1 block">
-                {health?.telemetry?.platform || "win32 x64"} • PID #{health?.telemetry?.pid || "-"}
-              </span>
+            <div className="text-xl sm:text-2xl font-bold font-mono text-white">
+              Node {health?.telemetry?.nodeVersion || process.version}
             </div>
+            <div className="text-[11px] text-gray-400 font-mono truncate">
+              {health?.telemetry?.platform || "win32 x64"} • PID #{health?.telemetry?.pid || "-"}
+            </div>
+          </div>
 
-            <div className="bg-white border border-gray-200 rounded-md p-4">
-              <span className="text-xs text-gray-500 font-medium block">Bellek Kullanımı (RAM)</span>
-              <span className="text-lg font-semibold text-gray-900 mt-1 block">
-                {health?.telemetry?.memory?.heapUsedMb || "0"} MB
-                <span className="text-xs text-gray-500 font-normal ml-1">
-                  / {health?.telemetry?.memory?.heapTotalMb || "0"} MB Heap
-                </span>
-              </span>
-              <span className="text-xs text-gray-500 mt-1 block">
-                Toplam RSS: {health?.telemetry?.memory?.rssMb || "0"} MB
+          {/* Tile 2: Memory (Heap & RSS) */}
+          <div className="p-4 rounded-lg bg-[#0c121e] border border-[#1a253a] space-y-2 shadow-xs">
+            <div className="flex items-center justify-between text-xs text-gray-400 font-mono">
+              <span>MEMORY (RAM)</span>
+              <span className="text-cyan-400 font-bold">
+                {health?.telemetry?.memory ? `${health.telemetry.memory.heapUsedMb} MB` : "-"}
               </span>
             </div>
+            <div className="text-xl sm:text-2xl font-bold font-mono text-white flex items-baseline gap-1.5">
+              <span>{health?.telemetry?.memory?.rssMb || 54}</span>
+              <span className="text-xs font-normal text-gray-400">MB RSS</span>
+            </div>
+            {/* Visual RAM Meter */}
+            <div className="w-full bg-[#162034] rounded-full h-1.5 overflow-hidden">
+              <div
+                className="bg-gradient-to-r from-cyan-500 to-emerald-400 h-1.5 rounded-full transition-all duration-500"
+                style={{
+                  width: `${Math.min(
+                    100,
+                    Math.max(
+                      10,
+                      ((health?.telemetry?.memory?.heapUsedMb || 25) /
+                        (health?.telemetry?.memory?.heapTotalMb || 60)) *
+                        100
+                    )
+                  )}%`,
+                }}
+              ></div>
+            </div>
+          </div>
 
-            <div className="bg-white border border-gray-200 rounded-md p-4">
-              <span className="text-xs text-gray-500 font-medium block">Ağ ve Port</span>
-              <span className="text-lg font-semibold text-gray-900 mt-1 block">
-                Port {health?.telemetry?.port || "3001"}
-              </span>
-              <span className="text-xs text-emerald-600 font-medium mt-1 block flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-emerald-600 inline-block"></span>
-                Bağlantı açık (127.0.0.1:{health?.telemetry?.port || "3001"})
+          {/* Tile 3: API Gateway Throughput */}
+          <div className="p-4 rounded-lg bg-[#0c121e] border border-[#1a253a] space-y-2 shadow-xs">
+            <div className="flex items-center justify-between text-xs text-gray-400 font-mono">
+              <span>API GECİKMESİ</span>
+              <span className="text-emerald-400 font-bold">
+                {metrics?.metricsSummary?.errorRatePercent === 0 ? "0 HATA" : `Hata: %${metrics?.metricsSummary?.errorRatePercent}`}
               </span>
             </div>
+            <div className="text-xl sm:text-2xl font-bold font-mono text-white flex items-baseline gap-1.5">
+              <span>{metrics?.metricsSummary?.avgLatencyMs ?? latency ?? 8}</span>
+              <span className="text-xs font-normal text-gray-400">ms ort.</span>
+            </div>
+            <div className="text-[11px] text-gray-400 font-mono">
+              Min: {metrics?.metricsSummary?.minLatencyMs ?? 3}ms • Max: {metrics?.metricsSummary?.maxLatencyMs ?? 40}ms
+            </div>
+          </div>
 
+          {/* Tile 4: SSE Realtime Localhost Stream */}
+          <div className="p-4 rounded-lg bg-[#0c121e] border border-[#1a253a] space-y-2 shadow-xs">
+            <div className="flex items-center justify-between text-xs text-gray-400 font-mono">
+              <span>SSE STREAM (0ms)</span>
+              <span className="px-1.5 py-0.2 rounded bg-cyan-500/10 text-cyan-300 text-[10px] border border-cyan-500/20">
+                OUTBOUND
+              </span>
+            </div>
+            <div className="text-xl sm:text-2xl font-bold font-mono text-cyan-400 flex items-baseline gap-1.5">
+              <span>{metrics?.metricsSummary?.activeSseClients ?? 0}</span>
+              <span className="text-xs font-normal text-gray-400">yerel istemci</span>
+            </div>
+            <div className="text-[11px] text-gray-400 font-mono truncate">
+              Kasiyer ve masaüstü programlarına canlı akış
+            </div>
           </div>
         </section>
 
-        {/* TELEGRAM NOTIFIER LIVE MONITOR SECTION */}
-        <section className="w-full bg-white border border-gray-200 rounded-lg shadow-xs overflow-hidden">
-          <div className="p-5 border-b border-gray-100 flex flex-wrap items-center justify-between gap-4 bg-gradient-to-r from-gray-50/80 to-white">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-lg bg-sky-500/10 text-sky-600 flex items-center justify-center text-xl font-bold shadow-xs">
-                ✈️
+        {/* 3. ⭐ INTERACTIVE COMMAND LINE / SERVER TERMINAL COMPONENT ⭐ */}
+        <section className="w-full rounded-lg bg-[#05080f] border border-[#182338] shadow-2xl overflow-hidden font-mono text-xs">
+          
+          {/* Terminal Window Header Bar */}
+          <div className="px-4 py-2.5 bg-[#0a0f1c] border-b border-[#182338] flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              {/* Mac/Linux Terminal Window Buttons */}
+              <div className="flex items-center gap-1.5">
+                <span className="w-3 h-3 rounded-full bg-red-500/80 inline-block"></span>
+                <span className="w-3 h-3 rounded-full bg-yellow-500/80 inline-block"></span>
+                <span className="w-3 h-3 rounded-full bg-emerald-500/80 inline-block"></span>
               </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <h3 className="text-base font-semibold text-gray-900">
-                    Telegram Canlı Bildirim Motoru (7/24 Server Daemon)
-                  </h3>
-                  <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold flex items-center gap-1.5 ${
-                    notifierState?.isRunning
-                      ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                      : "bg-amber-50 text-amber-700 border border-amber-200"
-                  }`}>
-                    <span className={`w-2 h-2 rounded-full ${notifierState?.isRunning ? "bg-emerald-500 animate-pulse" : "bg-amber-500"}`} />
-                    {notifierState?.isRunning ? "AKTİF • 7/24 DİNLİYOR" : "BEKLEMEDE"}
-                  </span>
+              <span className="text-gray-400 font-bold ml-2">
+                root@limon-server:~# <span className="text-gray-500 font-normal">/dev/tty1 (Interactive CLI &amp; Live Logs)</span>
+              </span>
+            </div>
+
+            {/* Terminal Actions */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setAutoScroll((prev) => !prev)}
+                className={`px-2.5 py-1 rounded text-[11px] font-mono transition border ${
+                  autoScroll
+                    ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
+                    : "bg-[#121927] text-gray-400 border-[#202c42]"
+                }`}
+                title="Yeni log geldiğinde otomatik aşağı kaydır"
+              >
+                Auto-scroll: {autoScroll ? "ON" : "OFF"}
+              </button>
+
+              <button
+                onClick={() => setTerminalLines([])}
+                className="px-2.5 py-1 rounded bg-[#121927] hover:bg-[#1a2438] text-gray-300 border border-[#202c42] transition text-[11px]"
+                title="Ekranı Temizle"
+              >
+                Clear
+              </button>
+
+              <button
+                onClick={() => {
+                  const allText = terminalLines.map((l) => `[${l.timestamp}] ${l.text}`).join("\n");
+                  navigator.clipboard.writeText(allText);
+                  addTerminalLine("system", "Tüm terminal geçmişi panoya kopyalandı.");
+                }}
+                className="px-2.5 py-1 rounded bg-[#121927] hover:bg-[#1a2438] text-gray-300 border border-[#202c42] transition text-[11px]"
+                title="Tüm logları kopyala"
+              >
+                Copy
+              </button>
+            </div>
+          </div>
+
+          {/* Terminal Console Output Body */}
+          <div className="p-4 max-h-72 sm:max-h-80 overflow-y-auto space-y-1 bg-[#05080f] text-gray-300 font-mono select-text">
+            {/* ASCII Banner */}
+            <pre className="text-emerald-500/70 text-[10px] sm:text-xs leading-none select-none py-1">
+{`   __    _                         _____                              
+  / /   (_)___ ___  ____  ____    / ___/___  ______   _____  _____    
+ / /   / / __ \`__ \\/ __ \\/ __ \\   \\__ \\/ _ \\/ ___/ | / / _ \\/ ___/    
+/ /___/ / / / / / / /_/ / / / /  ___/ /  __/ /   | |/ /  __/ /        
+\\_____/_/_/ /_/ /_/\\____/_/ /_/  /____/\\___/_/    |___/\\___/_/  v1.0.0 
+[DAEMON READY] [PORT: 3001] [SSE: ACTIVE] [TELEGRAM: DEDUP_LOCKED]`}
+            </pre>
+
+            {/* Log / CLI Output Lines */}
+            {terminalLines.map((line) => {
+              let colorClass = "text-gray-300";
+              if (line.type === "stdin") colorClass = "text-cyan-300 font-semibold";
+              else if (line.type === "stderr") colorClass = "text-red-400 font-semibold";
+              else if (line.type === "warn") colorClass = "text-yellow-400";
+              else if (line.type === "success") colorClass = "text-emerald-400";
+              else if (line.type === "system") colorClass = "text-indigo-300";
+
+              return (
+                <div key={line.id} className="leading-relaxed flex items-start gap-2 break-all hover:bg-white/[0.02] px-1 rounded">
+                  <span className="text-gray-600 select-none text-[11px]">[{line.timestamp}]</span>
+                  <span className={colorClass}>{line.text}</span>
                 </div>
-                <p className="text-xs text-gray-500 mt-0.5">
-                  Yeni siparişler, iptaller, müşteri yorumları ve iade talepleri istemcilere bağımlı olmadan doğrudan sunucudan anlık iletilir.
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2 flex-wrap">
-              {/* Tarama Frekansı Seçimi */}
-              <div className="flex items-center gap-1 bg-gray-100 p-1 rounded border border-gray-200 text-xs">
-                <span className="text-[11px] text-gray-500 px-1 font-medium">Hız:</span>
-                {[500, 800, 1000].map((ms) => (
-                  <button
-                    key={ms}
-                    onClick={() => handleUpdateInterval(ms)}
-                    className={`px-2 py-0.5 rounded text-[11px] font-medium transition ${
-                      notifierState?.config?.orderPollIntervalMs === ms
-                        ? "bg-white text-gray-900 shadow-xs border border-gray-200 font-semibold"
-                        : "text-gray-600 hover:text-gray-900"
-                    }`}
-                  >
-                    {ms}ms
-                  </button>
-                ))}
-              </div>
-
-              <button
-                onClick={handleSendTestMessage}
-                disabled={isSendingTest}
-                className="px-3 py-1.5 rounded bg-sky-600 hover:bg-sky-700 active:bg-sky-800 text-white text-xs font-medium transition flex items-center gap-1.5 shadow-xs disabled:opacity-50"
-              >
-                <span>🧪</span>
-                <span>{isSendingTest ? "Gönderiliyor..." : "Test Bildirimi Gönder"}</span>
-              </button>
-
-              <button
-                onClick={fetchNotifierState}
-                className="px-2.5 py-1.5 rounded border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 text-xs font-medium transition"
-                title="Durumu Yenile"
-              >
-                🔄
-              </button>
-            </div>
+              );
+            })}
+            <div ref={terminalEndRef} />
           </div>
 
-          {testResult && (
-            <div className="px-5 py-2.5 bg-sky-50 border-b border-sky-100 text-xs text-sky-800 flex items-center justify-between">
-              <span>{testResult}</span>
-              <button onClick={() => setTestResult(null)} className="text-sky-600 hover:text-sky-900 font-bold">✕</button>
-            </div>
-          )}
-
-          {/* Metric Tiles */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 divide-x divide-y sm:divide-y-0 divide-gray-100 border-b border-gray-100 text-xs bg-white">
-            <div className="p-4 space-y-1">
-              <div className="flex items-center justify-between text-gray-500">
-                <span className="font-medium">🚨 Yeni Siparişler</span>
-                <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 text-[10px] font-bold">
-                  {notifierState?.config?.orderPollIntervalMs || 800}ms
-                </span>
-              </div>
-              <div className="text-xl font-bold text-gray-900">
-                {notifierState?.stats?.newOrdersSent ?? 0} <span className="text-xs font-normal text-gray-400">gönderildi</span>
-              </div>
-              <div className="text-[11px] text-gray-400">
-                Hafızadaki: {notifierState?.knownCounters?.orders ?? 0} sipariş
-              </div>
-            </div>
-
-            <div className="p-4 space-y-1">
-              <div className="flex items-center justify-between text-gray-500">
-                <span className="font-medium">❌ İptal Siparişler</span>
-                <span className="px-1.5 py-0.5 rounded bg-red-50 text-red-700 text-[10px] font-bold">
-                  Anlık
-                </span>
-              </div>
-              <div className="text-xl font-bold text-gray-900">
-                {notifierState?.stats?.cancelledOrdersSent ?? 0} <span className="text-xs font-normal text-gray-400">gönderildi</span>
-              </div>
-              <div className="text-[11px] text-gray-400">
-                Hafızadaki: {notifierState?.knownCounters?.cancels ?? 0} iptal
-              </div>
-            </div>
-
-            <div className="p-4 space-y-1">
-              <div className="flex items-center justify-between text-gray-500">
-                <span className="font-medium">⭐ Müşteri Yorumları</span>
-                <span className="px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 text-[10px] font-bold">
-                  30s
-                </span>
-              </div>
-              <div className="text-xl font-bold text-gray-900">
-                {notifierState?.stats?.reviewsSent ?? 0} <span className="text-xs font-normal text-gray-400">gönderildi</span>
-              </div>
-              <div className="text-[11px] text-gray-400">
-                Hafızadaki: {notifierState?.knownCounters?.reviews ?? 0} yorum
-              </div>
-            </div>
-
-            <div className="p-4 space-y-1">
-              <div className="flex items-center justify-between text-gray-500">
-                <span className="font-medium">🔄 İade Talepleri</span>
-                <span className="px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 text-[10px] font-bold">
-                  15s
-                </span>
-              </div>
-              <div className="text-xl font-bold text-gray-900">
-                {notifierState?.stats?.claimsSent ?? 0} <span className="text-xs font-normal text-gray-400">gönderildi</span>
-              </div>
-              <div className="text-[11px] text-gray-400">
-                Hafızadaki: {notifierState?.knownCounters?.claims ?? 0} iade
-              </div>
-            </div>
-          </div>
-
-          {/* Son Bildirim Kayıtları */}
-          <div className="p-4 bg-gray-50/50">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
-                Son Bildirim Akışı
-              </span>
-              <span className="text-[11px] text-gray-400">
-                Toplam Sipariş Kontrolü: <strong>{notifierState?.stats?.ordersCheckedCount?.toLocaleString("tr-TR") ?? 0}</strong> kez
-              </span>
-            </div>
-
-            {notifierState?.recentLogs && notifierState.recentLogs.length > 0 ? (
-              <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
-                {notifierState.recentLogs.map((log: any) => (
-                  <div
-                    key={log.id}
-                    className="p-2 rounded bg-white border border-gray-200 text-xs flex items-center justify-between gap-3 shadow-2xs"
-                  >
-                    <div className="flex items-center gap-2 overflow-hidden">
-                      <span className="text-sm">
-                        {log.type === "order" ? "🚨" : log.type === "cancel" ? "❌" : log.type === "review" ? "⭐" : log.type === "claim" ? "🔄" : "⚡"}
-                      </span>
-                      <div className="truncate">
-                        <span className="font-semibold text-gray-900">{log.title}</span>
-                        <span className="text-gray-500 ml-2">{log.message}</span>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2 whitespace-nowrap text-[11px] text-gray-400">
-                      <span>{new Date(log.timestamp).toLocaleTimeString("tr-TR")}</span>
-                      <span className={`px-1.5 py-0.2 rounded text-[10px] font-medium ${
-                        log.success ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"
-                      }`}>
-                        {log.success ? "İletildi" : "Hata"}
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="py-6 text-center text-xs text-gray-400 bg-white rounded border border-dashed border-gray-200">
-                Henüz yeni bildirim tetiklenmedi. Bildirim motoru arka planda aktif olarak dinliyor.
-              </div>
-            )}
-          </div>
+          {/* Interactive Command Input Prompt */}
+          <form
+            onSubmit={handleTerminalSubmit}
+            className="px-4 py-2.5 bg-[#0a0f1c] border-t border-[#182338] flex items-center gap-2"
+          >
+            <span className="text-emerald-400 font-bold select-none whitespace-nowrap">
+              limon@server:~$
+            </span>
+            <input
+              type="text"
+              value={terminalInput}
+              onChange={(e) => setTerminalInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Komut girin (örn: 'status', 'ping', 'metrics', 'orders', 'help')..."
+              className="flex-1 bg-transparent border-none outline-none text-white font-mono text-xs placeholder:text-gray-600"
+              autoComplete="off"
+              spellCheck="false"
+            />
+            <button
+              type="submit"
+              className="px-3 py-1 rounded bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/30 text-xs font-mono font-medium transition cursor-pointer"
+            >
+              RUN ↵
+            </button>
+          </form>
         </section>
 
-        {/* DİNAMİK GRAFİKSEL SUNUCU SERVİS VE TELEMETRİ MERKEZİ */}
-        <section className="w-full space-y-4">
+        {/* 4. PERFORMANCE TELEMETRY GRAPHICAL SVG CHART */}
+        <section className="w-full space-y-3 rounded-lg bg-[#0a0e18] border border-[#182338] p-5 shadow-lg">
           <div className="w-full flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide">
-                  Canlı Sunucu Telemetrisi & Servis Durumları
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-[0_0_10px_#10b981] animate-pulse"></span>
+                <h3 className="text-sm font-bold text-white uppercase font-mono tracking-wider">
+                  CANLI GECİKME &amp; İSTEK GRAFİĞİ (TELEMETRY)
                 </h3>
               </div>
-              <p className="text-xs text-gray-500 mt-0.5">
-                Gerçek zamanlı ölçülen API gecikmesi, HTTP istek hacmi ve dinamik servis operasyonel grafiği
+              <p className="text-xs text-gray-400 font-mono mt-0.5">
+                Son 20 dakikalık HTTP yanıt süreleri ve dakikalık istek hacmi dağılımı
               </p>
             </div>
 
             <div className="flex items-center gap-2">
-              <div className="inline-flex rounded-md shadow-2xs border border-gray-200 bg-gray-50 p-0.5 text-xs">
+              <div className="inline-flex rounded-md border border-[#1e2a40] bg-[#0c121e] p-0.5 text-xs font-mono">
                 <button
                   onClick={() => setActiveGraphTab("latency")}
-                  className={`px-3 py-1 rounded font-medium transition ${
+                  className={`px-3 py-1 rounded font-medium transition cursor-pointer ${
                     activeGraphTab === "latency"
-                      ? "bg-white text-emerald-700 shadow-xs"
-                      : "text-gray-600 hover:text-gray-900"
+                      ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                      : "text-gray-400 hover:text-white"
                   }`}
                 >
                   ⚡ Yanıt Gecikmesi (ms)
                 </button>
                 <button
                   onClick={() => setActiveGraphTab("rpm")}
-                  className={`px-3 py-1 rounded font-medium transition ${
+                  className={`px-3 py-1 rounded font-medium transition cursor-pointer ${
                     activeGraphTab === "rpm"
-                      ? "bg-white text-emerald-700 shadow-xs"
-                      : "text-gray-600 hover:text-gray-900"
+                      ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/30"
+                      : "text-gray-400 hover:text-white"
                   }`}
                 >
                   📊 İstek Hacmi (RPM)
                 </button>
               </div>
 
+              {hoveredPoint && (
+                <div className="px-2.5 py-1 rounded bg-[#101726] border border-[#202d44] text-gray-200 font-mono text-[11px]">
+                  {hoveredPoint.timeLabel} • {hoveredPoint.latencyMs}ms • {hoveredPoint.rpm} req
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* SVG Canvas with Dark Glowing Aesthetics */}
+          <div className="w-full h-44 relative bg-[#060911] rounded border border-[#141d2e] overflow-hidden">
+            {(() => {
+              const points = metrics?.chartPoints || [];
+              if (points.length === 0) {
+                return (
+                  <div className="w-full h-full flex items-center justify-center text-xs text-gray-500 font-mono">
+                    Telemetri sinyali alınıyor...
+                  </div>
+                );
+              }
+
+              const values = points.map((p: any) =>
+                activeGraphTab === "latency" ? p.latencyMs : p.rpm
+              );
+              const maxVal = Math.max(...values, 20) * 1.25;
+              const minVal = 0;
+
+              const svgWidth = 800;
+              const svgHeight = 160;
+              const padLeft = 45;
+              const padRight = 20;
+              const padTop = 15;
+              const padBottom = 25;
+              const chartW = svgWidth - padLeft - padRight;
+              const chartH = svgHeight - padTop - padBottom;
+
+              const coords = points.map((p: any, idx: number) => {
+                const val = activeGraphTab === "latency" ? p.latencyMs : p.rpm;
+                const x = padLeft + (idx / Math.max(1, points.length - 1)) * chartW;
+                const y = padTop + chartH - ((val - minVal) / (maxVal - minVal)) * chartH;
+                return { x, y, point: p, val };
+              });
+
+              const pathD = coords.reduce((acc: string, curr: any, i: number) => {
+                if (i === 0) return `M ${curr.x} ${curr.y}`;
+                return `${acc} L ${curr.x} ${curr.y}`;
+              }, "");
+
+              const areaD = `${pathD} L ${coords[coords.length - 1].x} ${padTop + chartH} L ${coords[0].x} ${padTop + chartH} Z`;
+
+              const strokeColor = activeGraphTab === "latency" ? "#10b981" : "#06b6d4";
+              const fillColor = activeGraphTab === "latency" ? "url(#serverLatencyGrad)" : "url(#serverRpmGrad)";
+
+              return (
+                <svg
+                  viewBox={`0 0 ${svgWidth} ${svgHeight}`}
+                  className="w-full h-full preserve-3d"
+                  preserveAspectRatio="none"
+                >
+                  <defs>
+                    <linearGradient id="serverLatencyGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#10b981" stopOpacity="0.35" />
+                      <stop offset="100%" stopColor="#10b981" stopOpacity="0.0" />
+                    </linearGradient>
+                    <linearGradient id="serverRpmGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#06b6d4" stopOpacity="0.35" />
+                      <stop offset="100%" stopColor="#06b6d4" stopOpacity="0.0" />
+                    </linearGradient>
+                  </defs>
+
+                  {/* Horizontal Grid lines */}
+                  {[0, 0.33, 0.66, 1].map((ratio) => {
+                    const yPos = padTop + chartH - ratio * chartH;
+                    const labelVal = Math.round(minVal + ratio * (maxVal - minVal));
+                    return (
+                      <g key={ratio}>
+                        <line
+                          x1={padLeft}
+                          y1={yPos}
+                          x2={svgWidth - padRight}
+                          y2={yPos}
+                          stroke="#141e30"
+                          strokeDasharray="4 4"
+                          strokeWidth="1"
+                        />
+                        <text
+                          x={padLeft - 6}
+                          y={yPos + 3}
+                          fill="#475569"
+                          fontSize="10"
+                          fontFamily="monospace"
+                          textAnchor="end"
+                        >
+                          {labelVal}
+                          {activeGraphTab === "latency" ? "ms" : ""}
+                        </text>
+                      </g>
+                    );
+                  })}
+
+                  {/* Filled Area */}
+                  <path d={areaD} fill={fillColor} />
+
+                  {/* Main Glowing Line */}
+                  <path
+                    d={pathD}
+                    fill="none"
+                    stroke={strokeColor}
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+
+                  {/* Interactive Circles */}
+                  {coords.map((c: any, i: number) => (
+                    <circle
+                      key={i}
+                      cx={c.x}
+                      cy={c.y}
+                      r={hoveredPoint === c.point ? 5 : 3}
+                      fill={hoveredPoint === c.point ? "#ffffff" : strokeColor}
+                      stroke={strokeColor}
+                      strokeWidth="2"
+                      className="cursor-pointer transition-all duration-150"
+                      onMouseEnter={() => setHoveredPoint(c.point)}
+                      onMouseLeave={() => setHoveredPoint(null)}
+                    />
+                  ))}
+
+                  {/* Time labels on bottom */}
+                  {coords.filter((_: any, idx: number) => idx % 4 === 0 || idx === coords.length - 1).map((c: any, i: number) => (
+                    <text
+                      key={i}
+                      x={c.x}
+                      y={svgHeight - 6}
+                      fill="#475569"
+                      fontSize="9.5"
+                      fontFamily="monospace"
+                      textAnchor="middle"
+                    >
+                      {c.point.timeLabel}
+                    </text>
+                  ))}
+                </svg>
+              );
+            })()}
+          </div>
+        </section>
+
+        {/* 5. TELEGRAM NOTIFIER ENGINE CONTROLLER */}
+        <section className="w-full rounded-lg bg-[#0a0e18] border border-[#182338] p-5 shadow-lg space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#182338] pb-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-indigo-400 shadow-[0_0_10px_#818cf8] animate-pulse"></span>
+                <h3 className="text-sm font-bold text-white uppercase font-mono tracking-wider">
+                  TELEGRAM ANLIK BİLDİRİM MOTORU (DAEMON CONTROLLER)
+                </h3>
+              </div>
+              <p className="text-xs text-gray-400 font-mono mt-0.5">
+                Yeni sipariş, iptal, müşteri yorumu ve iade taleplerini tekilleştirme kilidiyle 7/24 iletir
+              </p>
+            </div>
+
+            {/* Interval Controls & Actions */}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-gray-400 font-mono mr-1">Tarama Hızı:</span>
+              {[500, 800, 1500, 3000].map((ms) => {
+                const isActive = notifierState?.config?.orderPollIntervalMs === ms;
+                return (
+                  <button
+                    key={ms}
+                    onClick={() => handleUpdateInterval(ms)}
+                    className={`px-2.5 py-1 rounded text-xs font-mono transition cursor-pointer border ${
+                      isActive
+                        ? "bg-indigo-500/20 text-indigo-300 border-indigo-500/40 font-bold"
+                        : "bg-[#0f1624] text-gray-400 border-[#1c2940] hover:text-white"
+                    }`}
+                  >
+                    {ms}ms
+                  </button>
+                );
+              })}
+
               <button
-                onClick={fetchMetrics}
-                className="px-2.5 py-1 rounded border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 text-xs font-medium transition shadow-2xs flex items-center gap-1"
-                title="Telemetriyi Yenile"
+                onClick={handleSendTestMessage}
+                disabled={isSendingTest}
+                className="px-3 py-1 rounded bg-sky-600/20 hover:bg-sky-600/30 text-sky-300 border border-sky-500/30 text-xs font-mono font-medium transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 ml-2"
               >
-                <span>🔄</span>
+                <span>🧪</span>
+                <span>{isSendingTest ? "Gönderiliyor..." : "Test Gönder"}</span>
               </button>
             </div>
           </div>
 
-          {/* KPI İstatistik Kartları */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div className="p-4 rounded-lg bg-white border border-gray-200 shadow-2xs">
-              <div className="text-xs font-medium text-gray-500">⚡ Ortalama Gecikme</div>
-              <div className="mt-1 flex items-baseline gap-2">
-                <span className="text-2xl font-bold text-gray-900">
-                  {metrics?.metricsSummary?.avgLatencyMs ?? 12}
-                </span>
-                <span className="text-xs font-medium text-gray-500">ms</span>
+          {testResult && (
+            <div className="p-2.5 rounded bg-sky-950/40 border border-sky-500/30 text-xs font-mono text-sky-200 flex items-center justify-between">
+              <span>{testResult}</span>
+              <button onClick={() => setTestResult(null)} className="text-sky-400 font-bold hover:text-white">✕</button>
+            </div>
+          )}
+
+          {/* Metric Tiles */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono">
+            <div className="p-3.5 rounded bg-[#070b13] border border-[#141d2e] space-y-1">
+              <div className="text-gray-400 flex justify-between">
+                <span>🚨 YENİ SİPARİŞ</span>
+                <span className="text-emerald-400">{notifierState?.config?.orderPollIntervalMs || 800}ms</span>
               </div>
-              <div className="text-[11px] text-gray-400 mt-0.5">
-                Min: {metrics?.metricsSummary?.minLatencyMs ?? 4}ms • Maks: {metrics?.metricsSummary?.maxLatencyMs ?? 45}ms
+              <div className="text-xl font-bold text-white">
+                {notifierState?.stats?.newOrdersSent ?? 0} <span className="text-xs font-normal text-gray-500">adet</span>
               </div>
+              <div className="text-[11px] text-gray-500">Hafızada: {notifierState?.knownCounters?.orders ?? 0} sipariş</div>
             </div>
 
-            <div className="p-4 rounded-lg bg-white border border-gray-200 shadow-2xs">
-              <div className="text-xs font-medium text-gray-500">📉 Hata Oranı (5xx)</div>
-              <div className="mt-1 flex items-baseline gap-2">
-                <span className="text-2xl font-bold text-emerald-600">
-                  %{metrics?.metricsSummary?.errorRatePercent ?? "0.00"}
-                </span>
+            <div className="p-3.5 rounded bg-[#070b13] border border-[#141d2e] space-y-1">
+              <div className="text-gray-400 flex justify-between">
+                <span>❌ İPTAL SİPARİŞ</span>
+                <span className="text-red-400">Anlık</span>
               </div>
-              <div className="text-[11px] text-gray-400 mt-0.5">
-                İzlenen İstek: {metrics?.metricsSummary?.totalRequestsTracked ?? 0}
+              <div className="text-xl font-bold text-white">
+                {notifierState?.stats?.cancelledOrdersSent ?? 0} <span className="text-xs font-normal text-gray-500">adet</span>
               </div>
+              <div className="text-[11px] text-gray-500">Hafızada: {notifierState?.knownCounters?.cancels ?? 0} iptal</div>
             </div>
 
-            <div className="p-4 rounded-lg bg-white border border-gray-200 shadow-2xs">
-              <div className="text-xs font-medium text-gray-500">📡 Aktif Yerel Program (SSE)</div>
-              <div className="mt-1 flex items-baseline gap-2">
-                <span className="text-2xl font-bold text-sky-600">
-                  {metrics?.metricsSummary?.activeSseClients ?? 0}
-                </span>
-                <span className="text-xs font-medium text-gray-500">istemci</span>
+            <div className="p-3.5 rounded bg-[#070b13] border border-[#141d2e] space-y-1">
+              <div className="text-gray-400 flex justify-between">
+                <span>⭐ MÜŞTERİ YORUMU</span>
+                <span className="text-yellow-400">30s</span>
               </div>
-              <div className="text-[11px] text-gray-400 mt-0.5">
-                0ms gecikmeli canlı sipariş akışı
+              <div className="text-xl font-bold text-white">
+                {notifierState?.stats?.reviewsSent ?? 0} <span className="text-xs font-normal text-gray-500">adet</span>
               </div>
+              <div className="text-[11px] text-gray-500">Hafızada: {notifierState?.knownCounters?.reviews ?? 0} yorum</div>
             </div>
 
-            <div className="p-4 rounded-lg bg-white border border-gray-200 shadow-2xs">
-              <div className="text-xs font-medium text-gray-500">🤖 Telegram Bildirim</div>
-              <div className="mt-1 flex items-baseline gap-2">
-                <span className="text-2xl font-bold text-indigo-600">
-                  {metrics?.metricsSummary?.totalOrdersNotified ?? 0}
-                </span>
-                <span className="text-xs font-medium text-gray-500">sipariş</span>
+            <div className="p-3.5 rounded bg-[#070b13] border border-[#141d2e] space-y-1">
+              <div className="text-gray-400 flex justify-between">
+                <span>🔄 İADE TALEBİ</span>
+                <span className="text-indigo-400">15s</span>
               </div>
-              <div className="text-[11px] text-gray-400 mt-0.5">
-                Tarama Hızı: {metrics?.metricsSummary?.pollIntervalMs ?? 800}ms
+              <div className="text-xl font-bold text-white">
+                {notifierState?.stats?.claimsSent ?? 0} <span className="text-xs font-normal text-gray-500">adet</span>
               </div>
-            </div>
-          </div>
-
-          {/* İNTERAKTİF SVG GRAFİK ALANI */}
-          <div className="p-5 rounded-lg bg-white border border-gray-200 shadow-xs space-y-3">
-            <div className="flex items-center justify-between text-xs text-gray-500">
-              <div className="flex items-center gap-2">
-                <span className="font-semibold text-gray-800">
-                  {activeGraphTab === "latency" ? "Yanıt Süresi Dağılımı (ms)" : "Dakikalık İstek Sayısı (RPM)"}
-                </span>
-                <span className="text-gray-400">• Son 20 Dakika (1 dakikalık çözünürlük)</span>
-              </div>
-              {hoveredPoint && (
-                <div className="px-2.5 py-1 rounded bg-gray-900 text-white font-mono text-[11px] shadow-sm">
-                  Saat: {hoveredPoint.timeLabel} | Gecikme: {hoveredPoint.latencyMs}ms | İstek: {hoveredPoint.rpm}
-                </div>
-              )}
-            </div>
-
-            {/* SVG Canvas */}
-            <div className="w-full h-44 relative bg-gray-50/50 rounded border border-gray-100 overflow-hidden">
-              {(() => {
-                const points = metrics?.chartPoints || [];
-                if (points.length === 0) {
-                  return (
-                    <div className="w-full h-full flex items-center justify-center text-xs text-gray-400">
-                      Telemetri verisi yükleniyor...
-                    </div>
-                  );
-                }
-
-                const values = points.map((p: any) =>
-                  activeGraphTab === "latency" ? p.latencyMs : p.rpm
-                );
-                const maxVal = Math.max(...values, 20) * 1.25;
-                const minVal = 0;
-
-                const svgWidth = 800;
-                const svgHeight = 160;
-                const padLeft = 45;
-                const padRight = 20;
-                const padTop = 15;
-                const padBottom = 25;
-                const chartW = svgWidth - padLeft - padRight;
-                const chartH = svgHeight - padTop - padBottom;
-
-                const coords = points.map((p: any, idx: number) => {
-                  const val = activeGraphTab === "latency" ? p.latencyMs : p.rpm;
-                  const x = padLeft + (idx / Math.max(1, points.length - 1)) * chartW;
-                  const y = padTop + chartH - ((val - minVal) / (maxVal - minVal)) * chartH;
-                  return { x, y, point: p, val };
-                });
-
-                // Smooth Path Generation
-                const pathD = coords.reduce((acc: string, curr: any, i: number) => {
-                  if (i === 0) return `M ${curr.x} ${curr.y}`;
-                  return `${acc} L ${curr.x} ${curr.y}`;
-                }, "");
-
-                const areaD = `${pathD} L ${coords[coords.length - 1].x} ${padTop + chartH} L ${coords[0].x} ${padTop + chartH} Z`;
-
-                const strokeColor = activeGraphTab === "latency" ? "#10b981" : "#0284c7";
-                const fillColor = activeGraphTab === "latency" ? "url(#latencyGrad)" : "url(#rpmGrad)";
-
-                return (
-                  <svg
-                    viewBox={`0 0 ${svgWidth} ${svgHeight}`}
-                    className="w-full h-full preserve-3d"
-                    preserveAspectRatio="none"
-                  >
-                    <defs>
-                      <linearGradient id="latencyGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="#10b981" stopOpacity="0.35" />
-                        <stop offset="100%" stopColor="#10b981" stopOpacity="0.0" />
-                      </linearGradient>
-                      <linearGradient id="rpmGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="#0284c7" stopOpacity="0.35" />
-                        <stop offset="100%" stopColor="#0284c7" stopOpacity="0.0" />
-                      </linearGradient>
-                    </defs>
-
-                    {/* Horizontal Grid lines */}
-                    {[0, 0.33, 0.66, 1].map((ratio) => {
-                      const yPos = padTop + chartH - ratio * chartH;
-                      const labelVal = Math.round(minVal + ratio * (maxVal - minVal));
-                      return (
-                        <g key={ratio}>
-                          <line
-                            x1={padLeft}
-                            y1={yPos}
-                            x2={svgWidth - padRight}
-                            y2={yPos}
-                            stroke="#e5e7eb"
-                            strokeDasharray="4 4"
-                            strokeWidth="1"
-                          />
-                          <text
-                            x={padLeft - 6}
-                            y={yPos + 3}
-                            fill="#9ca3af"
-                            fontSize="10"
-                            textAnchor="end"
-                          >
-                            {labelVal}
-                            {activeGraphTab === "latency" ? "ms" : ""}
-                          </text>
-                        </g>
-                      );
-                    })}
-
-                    {/* Filled Area */}
-                    <path d={areaD} fill={fillColor} />
-
-                    {/* Main Line */}
-                    <path
-                      d={pathD}
-                      fill="none"
-                      stroke={strokeColor}
-                      strokeWidth="2.5"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-
-                    {/* Interactive Circles */}
-                    {coords.map((c: any, i: number) => (
-                      <circle
-                        key={i}
-                        cx={c.x}
-                        cy={c.y}
-                        r={hoveredPoint === c.point ? 5 : 3}
-                        fill={hoveredPoint === c.point ? "#ffffff" : strokeColor}
-                        stroke={strokeColor}
-                        strokeWidth="2"
-                        className="cursor-pointer transition-all duration-150"
-                        onMouseEnter={() => setHoveredPoint(c.point)}
-                        onMouseLeave={() => setHoveredPoint(null)}
-                      />
-                    ))}
-
-                    {/* Time labels on bottom */}
-                    {coords.filter((_: any, idx: number) => idx % 4 === 0 || idx === coords.length - 1).map((c: any, i: number) => (
-                      <text
-                        key={i}
-                        x={c.x}
-                        y={svgHeight - 6}
-                        fill="#9ca3af"
-                        fontSize="9.5"
-                        textAnchor="middle"
-                      >
-                        {c.point.timeLabel}
-                      </text>
-                    ))}
-                  </svg>
-                );
-              })()}
+              <div className="text-[11px] text-gray-500">Hafızada: {notifierState?.knownCounters?.claims ?? 0} iade</div>
             </div>
           </div>
+        </section>
 
-          {/* DİNAMİK SERVİS DURUM LİSTESİ */}
-          <div className="w-full bg-white border border-gray-200 rounded-md divide-y divide-gray-200 shadow-xs">
+        {/* 6. DINAMIK 90 GÜNLÜK SUNUCU SERVİS RACKLERİ */}
+        <section className="w-full space-y-3 rounded-lg bg-[#0a0e18] border border-[#182338] p-5 shadow-lg">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#182338] pb-3">
+            <div>
+              <h3 className="text-sm font-bold text-white uppercase font-mono tracking-wider">
+                SUNUCU SERVİS SAĞLIK MATRİSİ (SON 90 GÜN)
+              </h3>
+              <p className="text-xs text-gray-400 font-mono mt-0.5">
+                Her bileşenin gerçek operasyonel durumu, gecikmesi ve kesintisiz çalışma oranı
+              </p>
+            </div>
+            <span className="text-xs text-gray-500 font-mono">
+              Dynamic Status Rack // All systems measured live
+            </span>
+          </div>
+
+          <div className="divide-y divide-[#141d2e]">
             {services.map((srv) => (
-              <div key={srv.id} className="p-5 space-y-3">
-                {/* Header row: Service Name + Tooltip & Operational status */}
+              <div key={srv.id} className="py-4 space-y-2.5">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <span
                       className={`w-2.5 h-2.5 rounded-full ${
                         srv.statusText === "Operational"
-                          ? "bg-emerald-500 shadow-xs animate-pulse"
-                          : "bg-amber-500"
+                          ? "bg-emerald-400 shadow-[0_0_8px_#10b981] animate-pulse"
+                          : "bg-yellow-400"
                       }`}
                     />
-                    <span className="text-base font-medium text-gray-900">{srv.name}</span>
-                    <div className="relative group">
-                      <button
-                        type="button"
-                        className="w-4 h-4 rounded-full border border-gray-400 text-gray-500 hover:text-gray-800 hover:border-gray-600 text-[10px] font-bold flex items-center justify-center transition cursor-help"
-                      >
-                        ?
-                      </button>
-                      <div className="absolute left-6 top-1/2 -translate-y-1/2 hidden group-hover:block z-20 w-64 p-2 bg-gray-900 text-white text-xs rounded shadow-lg">
-                        {srv.tooltip}
-                      </div>
-                    </div>
+                    <span className="text-sm font-bold text-gray-100 font-mono">{srv.name}</span>
+                    <span className="text-[11px] text-gray-500 font-mono hidden sm:inline">({srv.tooltip})</span>
                   </div>
                   <span
-                    className={`text-sm font-semibold flex items-center gap-1.5 ${
-                      srv.statusText === "Operational" ? "text-emerald-600" : "text-amber-600"
+                    className={`text-xs font-bold font-mono ${
+                      srv.statusText === "Operational" ? "text-emerald-400" : "text-yellow-400"
                     }`}
                   >
-                    <span>{srv.statusText === "Operational" ? "● Operational" : "▲ Degraded"}</span>
+                    ● {srv.statusText}
                   </span>
                 </div>
 
@@ -953,10 +1228,10 @@ export default function Home() {
                     {srv.bars.map((bar) => {
                       const barColor =
                         bar.status === "ok"
-                          ? "bg-emerald-500 hover:bg-emerald-600"
+                          ? "bg-emerald-500/80 hover:bg-emerald-400"
                           : bar.status === "degraded"
-                          ? "bg-amber-500 hover:bg-amber-600"
-                          : "bg-red-500 hover:bg-red-600";
+                          ? "bg-yellow-500 hover:bg-yellow-400"
+                          : "bg-red-500 hover:bg-red-400";
                       const hoverKey = `${srv.id}-${bar.dayIndex}`;
 
                       return (
@@ -966,12 +1241,10 @@ export default function Home() {
                           onMouseEnter={() => setHoveredBar(hoverKey)}
                           onMouseLeave={() => setHoveredBar(null)}
                         >
-                          <div
-                            className={`w-full h-8 rounded-[1px] transition-colors cursor-pointer ${barColor}`}
-                          />
+                          <div className={`w-full h-7 rounded-[1px] transition-colors cursor-pointer ${barColor}`} />
                           {hoveredBar === hoverKey && (
-                            <div className="absolute bottom-10 left-1/2 -translate-x-1/2 z-30 whitespace-nowrap px-2.5 py-1.5 bg-gray-900 text-white text-[11px] rounded shadow-md pointer-events-none">
-                              <span className="font-semibold">{bar.dateLabel}:</span>{" "}
+                            <div className="absolute bottom-9 left-1/2 -translate-x-1/2 z-30 whitespace-nowrap px-2.5 py-1 bg-black/90 border border-gray-700 text-white font-mono text-[11px] rounded shadow-lg pointer-events-none">
+                              <span className="font-semibold text-emerald-400">{bar.dateLabel}:</span>{" "}
                               {bar.status === "ok"
                                 ? "Kesintisiz & Sağlıklı (%100)"
                                 : bar.status === "degraded"
@@ -985,147 +1258,104 @@ export default function Home() {
                   </div>
                 </div>
 
-                {/* Timeline footer row: 90 days ago ─── uptime ─── Today */}
-                <div className="w-full flex items-center justify-between text-xs text-gray-500 pt-1">
-                  <span className="whitespace-nowrap">90 days ago</span>
+                {/* Timeline footer */}
+                <div className="w-full flex items-center justify-between text-xs font-mono text-gray-500 pt-0.5">
+                  <span>90 gün önce</span>
                   <div className="flex-1 mx-4 flex items-center">
-                    <div className="flex-1 border-t border-gray-300"></div>
-                    <span className="px-3 text-gray-700 font-semibold whitespace-nowrap">
-                      {srv.uptimePercent}
-                    </span>
-                    <div className="flex-1 border-t border-gray-300"></div>
+                    <div className="flex-1 border-t border-[#1a253a]"></div>
+                    <span className="px-3 text-gray-400 font-semibold">{srv.uptimePercent}</span>
+                    <div className="flex-1 border-t border-[#1a253a]"></div>
                   </div>
-                  <span className="whitespace-nowrap">Today</span>
+                  <span>Bugün</span>
                 </div>
               </div>
             ))}
           </div>
         </section>
 
-        {/* API Endpoints Catalog - Full Width & Clean Table */}
-        <section className="w-full space-y-3">
-          <div className="w-full flex flex-wrap items-center justify-between gap-3">
+        {/* 7. API ENDPOINTS CATALOG (SERVER ROUTING SPEC) */}
+        <section className="w-full space-y-3 rounded-lg bg-[#0a0e18] border border-[#182338] p-5 shadow-lg">
+          <div className="w-full flex flex-wrap items-center justify-between gap-3 border-b border-[#182338] pb-3">
             <div>
-              <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">
-                API Servisleri ve Uç Noktalar ({filteredEndpoints.length})
+              <h3 className="text-sm font-bold text-white uppercase font-mono tracking-wider">
+                API GATEWAY UÇ NOKTALARI &amp; YÖNLENDİRİCİ
               </h3>
-              <p className="text-xs text-gray-500">
-                Masaüstü paneli, mobil uygulama ve dış entegrasyonlar için kullanılabilir REST endpoint listesi
+              <p className="text-xs text-gray-400 font-mono mt-0.5">
+                Limon Panel frontend ve harici servisler için sunulan REST API ve Webhook rotaları
               </p>
             </div>
 
-            <div className="w-full sm:w-80">
+            <div className="w-full sm:w-64">
               <input
                 type="text"
+                placeholder="Endpoint ara (/api/..., GET, POST)..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Endpoint veya açıklama filtrele..."
-                className="w-full px-3 py-1.5 border border-gray-300 rounded text-xs text-gray-900 placeholder-gray-400 focus:outline-none focus:border-emerald-500 transition"
+                className="w-full px-3 py-1.5 rounded bg-[#060911] border border-[#1a253a] text-xs font-mono text-white placeholder:text-gray-600 outline-none focus:border-emerald-500/50"
               />
             </div>
           </div>
 
-          <div className="w-full bg-white border border-gray-200 rounded-md overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs border-collapse">
-                <thead className="bg-gray-50 text-gray-600 uppercase font-semibold text-[11px] border-b border-gray-200">
-                  <tr>
-                    <th className="px-4 py-3 w-20">Metot</th>
-                    <th className="px-4 py-3 w-64">Endpoint Yolu</th>
-                    <th className="px-4 py-3 w-32">Kategori</th>
-                    <th className="px-4 py-3 w-40">Yetki Türü</th>
-                    <th className="px-4 py-3">Açıklama</th>
-                    <th className="px-4 py-3 w-24 text-right">İşlem</th>
+          <div className="w-full overflow-x-auto">
+            <table className="w-full text-left text-xs font-mono">
+              <thead>
+                <tr className="border-b border-[#162032] text-gray-500 uppercase text-[11px]">
+                  <th className="py-2.5 px-3">Metod</th>
+                  <th className="py-2.5 px-3">Yol (Endpoint)</th>
+                  <th className="py-2.5 px-3">Yetki</th>
+                  <th className="py-2.5 px-3">Kategori</th>
+                  <th className="py-2.5 px-3">Açıklama</th>
+                  <th className="py-2.5 px-3 text-right">Eylem</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#101726]">
+                {filteredEndpoints.map((ep, idx) => (
+                  <tr key={idx} className="hover:bg-white/[0.02] transition">
+                    <td className="py-2.5 px-3">
+                      <span
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                          ep.method === "POST"
+                            ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
+                            : "bg-cyan-500/20 text-cyan-400 border border-cyan-500/30"
+                        }`}
+                      >
+                        {ep.method}
+                      </span>
+                    </td>
+                    <td className="py-2.5 px-3 font-bold text-white select-all">
+                      {ep.path}
+                    </td>
+                    <td className="py-2.5 px-3 text-gray-400">
+                      <span className="px-1.5 py-0.5 rounded bg-[#101726] border border-[#1a253a] text-[11px]">
+                        {ep.auth}
+                      </span>
+                    </td>
+                    <td className="py-2.5 px-3 text-gray-400">{ep.category}</td>
+                    <td className="py-2.5 px-3 text-gray-400 font-sans">{ep.desc}</td>
+                    <td className="py-2.5 px-3 text-right">
+                      <button
+                        onClick={() => copyToClipboard(ep.path, ep.path)}
+                        className="px-2 py-0.5 rounded bg-[#121927] hover:bg-[#1a2538] text-gray-300 border border-[#1e2a40] text-[11px] cursor-pointer"
+                      >
+                        {copiedKey === ep.path ? "Kopyalandı" : "Kopyala"}
+                      </button>
+                    </td>
                   </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {filteredEndpoints.map((ep, i) => (
-                    <tr key={i} className="hover:bg-gray-50/80 transition-colors">
-                      <td className="px-4 py-3">
-                        <span
-                          className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                            ep.method === "GET"
-                              ? "bg-blue-50 text-blue-700 border border-blue-200"
-                              : "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                          }`}
-                        >
-                          {ep.method}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 font-mono font-medium text-gray-900">
-                        {ep.path}
-                      </td>
-                      <td className="px-4 py-3 text-gray-600">
-                        {ep.category}
-                      </td>
-                      <td className="px-4 py-3 text-gray-600">
-                        <span className="px-2 py-0.5 bg-gray-100 rounded text-[11px] text-gray-700 border border-gray-200">
-                          {ep.auth}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-gray-600">
-                        {ep.desc}
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <button
-                          onClick={() => copyToClipboard(ep.path, ep.path)}
-                          className="px-2 py-1 rounded bg-white hover:bg-gray-100 border border-gray-300 text-gray-700 text-[11px] transition"
-                        >
-                          {copiedKey === ep.path ? "Kopyalandı!" : "Kopyala"}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </section>
-
-        {/* Client Configuration Help (Limon Panel & Limon Mobile) */}
-        <section className="w-full grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="bg-white border border-gray-200 rounded-md p-4 space-y-2">
-            <h4 className="text-sm font-semibold text-gray-800">
-              Limon Panel (Masaüstü) .env.local Yapılandırması
-            </h4>
-            <p className="text-xs text-gray-500">
-              Masaüstü uygulamanızın sunucuyla haberleşmesi için aşağıdaki çevre değişkenlerini tanımlayın:
-            </p>
-            <pre className="p-3 bg-gray-50 border border-gray-200 rounded text-xs font-mono text-gray-800 overflow-x-auto">
-{`NEXT_PUBLIC_API_URL=http://localhost:3001
-X_SERVER_KEY=limon_sec_k98f234_main_server_key_2026`}
-            </pre>
-          </div>
-
-          <div className="bg-white border border-gray-200 rounded-md p-4 space-y-2">
-            <h4 className="text-sm font-semibold text-gray-800">
-              Limon Mobile (Mobil) API İsteği
-            </h4>
-            <p className="text-xs text-gray-500">
-              Mobil istemciler doğrudan X-Server-Key başlığıyla merkezi sunucuya istek gönderir:
-            </p>
-            <pre className="p-3 bg-gray-50 border border-gray-200 rounded text-xs font-mono text-gray-800 overflow-x-auto">
-{`fetch('http://SUNUCU_IP:3001/api/siparisler', {
-  headers: {
-    'X-Server-Key': 'limon_sec_k98f234_main_server_key_2026',
-    'Content-Type': 'application/json'
-  }
-})`}
-            </pre>
+                ))}
+              </tbody>
+            </table>
           </div>
         </section>
 
       </main>
 
-      {/* Corporate Clean Footer */}
-      <footer className="w-full border-t border-gray-200 bg-white py-6 mt-12 text-xs text-gray-500">
-        <div className="w-full px-4 sm:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
-          <div>
-            <strong>Limon Central Infrastructure</strong> • Güvenli Merkezi API ve Entegrasyon Sunucusu
-          </div>
-          <div>
-            Sunucu Zaman Damgası: {health?.timestamp || new Date().toISOString()}
-          </div>
+      {/* FOOTER */}
+      <footer className="w-full border-t border-[#141d2e] bg-[#05080f] py-4 px-4 sm:px-8 mt-12 text-xs font-mono text-gray-500 flex flex-wrap items-center justify-between gap-4">
+        <div>
+          Limon Central API Server Core • Version 1.0.0 • Production Ready
+        </div>
+        <div>
+          Architecture: Node.js (Next.js App Router) + Redis Engine + SSE Broadcaster + Prisma ORM
         </div>
       </footer>
     </div>
