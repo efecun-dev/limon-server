@@ -20,7 +20,12 @@
     "catalog.search": true,
     "catalog.create": true,
     "telegram.send": true,
-    "keys.view": true
+    "keys.view": true,
+    "notifications.receive_orders": true,
+    "notifications.receive_returns": true,
+    "notifications.receive_reviews": true,
+    "notifications.receive_system": true,
+    "notifications.receive_critical_stock": true
   },
   "MANAGER": {
     "dashboard.view": true,
@@ -43,7 +48,12 @@
     "catalog.search": true,
     "catalog.create": true,
     "telegram.send": true,
-    "keys.view": false
+    "keys.view": false,
+    "notifications.receive_orders": true,
+    "notifications.receive_returns": true,
+    "notifications.receive_reviews": true,
+    "notifications.receive_system": false,
+    "notifications.receive_critical_stock": true
   },
   "CASHIER": {
     "dashboard.view": true,
@@ -66,7 +76,12 @@
     "catalog.search": true,
     "catalog.create": false,
     "telegram.send": false,
-    "keys.view": false
+    "keys.view": false,
+    "notifications.receive_orders": true,
+    "notifications.receive_returns": false,
+    "notifications.receive_reviews": false,
+    "notifications.receive_system": false,
+    "notifications.receive_critical_stock": false
   },
   "USER": {
     "dashboard.view": true,
@@ -89,6 +104,11 @@
     "catalog.search": true,
     "catalog.create": false,
     "telegram.send": false,
-    "keys.view": false
+    "keys.view": false,
+    "notifications.receive_orders": false,
+    "notifications.receive_returns": false,
+    "notifications.receive_reviews": false,
+    "notifications.receive_system": false,
+    "notifications.receive_critical_stock": false
   }
 }

@@ -237,6 +237,49 @@ export const PERMISSION_CATEGORIES: PermissionCategory[] = [
       },
     ],
   },
+  {
+    id: "notifications",
+    name: "Bildirim Dağıtım & İletim Yönetimi (Kullanıcı Bildirimleri)",
+    icon: "🔔",
+    description: "Hangi rollerin ve personellerin masaüstü / sistem bildirimlerini alacağını belirleme",
+    permissions: [
+      {
+        id: "notifications.receive_orders",
+        name: "Yeni Sipariş Bildirimleri",
+        description: "Yeni bir sipariş düştüğünde Windows ve masaüstü bildirim sesi / uyarısı alma",
+        category: "notifications",
+        defaultRoles: ["ADMIN", "MANAGER", "CASHIER"],
+      },
+      {
+        id: "notifications.receive_returns",
+        name: "Yeni İade Talebi Bildirimleri",
+        description: "Müşteri iade talebi oluşturduğunda anında uyarı bildirimi alma",
+        category: "notifications",
+        defaultRoles: ["ADMIN", "MANAGER"],
+      },
+      {
+        id: "notifications.receive_reviews",
+        name: "Yeni Müşteri Değerlendirmesi Bildirimleri",
+        description: "Yeni müşteri yorumu ve puanı geldiğinde masaüstü uyarısı alma",
+        category: "notifications",
+        defaultRoles: ["ADMIN", "MANAGER"],
+      },
+      {
+        id: "notifications.receive_system",
+        name: "Sistem, Batch & Hata Bildirimleri",
+        description: "Trendyol batch hata, entegrasyon kopması veya webhook arızası uyarılarını alma",
+        category: "notifications",
+        defaultRoles: ["ADMIN"],
+      },
+      {
+        id: "notifications.receive_critical_stock",
+        name: "Kritik Stok & Sıfır Stok Bildirimleri",
+        description: "Ürünlerin stoğu tükendiğinde veya kritik eşiğe indiğinde alarm alma",
+        category: "notifications",
+        defaultRoles: ["ADMIN", "MANAGER"],
+      },
+    ],
+  },
 ];
 
 // Tüm izinlerin düz listesi
