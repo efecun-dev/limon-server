@@ -134,7 +134,7 @@ export default function NotificationsPage() {
             onClick={fetchNotifications}
             className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs transition cursor-pointer flex items-center gap-1.5 "
           >
-            <span><RotateCcw /> Listeyi Yenile</span>
+            <span><RotateCcw size={12} /> Listeyi Yenile</span>
           </button>
         </div>
 
@@ -189,11 +189,11 @@ export default function NotificationsPage() {
                 onChange={(e) => setTestType(e.target.value)}
                 className="w-full px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-slate-800 font-semibold outline-none focus:border-emerald-500"
               >
-                <option value="review"><Star /> Yorum (Müşteri Değerlendirmesi)</option>
-                <option value="return"><RefreshCw /> İade Talebi</option>
-                <option value="cancellation"><TriangleAlert /> İptal Bildirimi</option>
-                <option value="order"><Package /> Yeni Sipariş</option>
-                <option value="system"><Bell /> Sistem Uyarısı</option>
+                <option value="review">Yorum (Müşteri Değerlendirmesi)</option>
+                <option value="return">İade Talebi</option>
+                <option value="cancellation">İptal Bildirimi</option>
+                <option value="order">Yeni Sipariş</option>
+                <option value="system">Sistem Uyarısı</option>
               </select>
             </div>
 

@@ -323,7 +323,7 @@ export default function LogsPage() {
                                 className="text-slate-400 hover:text-slate-700 p-0.5 rounded transition cursor-pointer"
                                 title="Kopyala"
                               >
-                                {copiedKey === `p-${log.id}` ? <Check /> : <Copy />}
+                                {copiedKey === `p-${log.id}` ? <Check size={12} /> : <Copy size={12} />}
                               </button>
                             </div>
                           </td>

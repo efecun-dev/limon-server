@@ -32,10 +32,10 @@ export function ServerNavbar() {
   };
 
   const navItems = [
-    { href: "/", label: "Sistem Durumu", icon: <ChartPie /> },
-    { href: "/logs", label: "İstek Logları", icon: <ClipboardClock /> },
-    { href: "/notifications", label: "Bildirimler", icon: <Bell /> },
-    { href: "/settings", label: "Ayarlar & RBAC", icon: <Cog /> },
+    { href: "/", label: "Sistem Durumu", icon: <ChartPie size={12} /> },
+    { href: "/logs", label: "İstek Logları", icon: <ClipboardClock size={12} /> },
+    { href: "/notifications", label: "Bildirimler", icon: <Bell size={12} /> },
+    { href: "/settings", label: "Ayarlar & RBAC", icon: <Cog size={12} /> },
   ];
 
   if (pathname === "/login") return null;

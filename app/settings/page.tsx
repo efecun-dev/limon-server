@@ -453,7 +453,7 @@ export default function SettingsPage() {
               : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
               }`}
           >
-            <span><Server /></span>
+            <span><Server size={12} /></span>
             <span>Sistem & Donanım</span>
           </button>
 
@@ -464,7 +464,7 @@ export default function SettingsPage() {
               : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
               }`}
           >
-            <span><Users /></span>
+            <span><Users size={12} /></span>
             <span>Kullanıcı Yönetimi</span>
             <span className="ml-1 px-1.5 py-0.5 rounded-full text-[10px] bg-slate-100 text-slate-700 font-mono">
               {users.length}
@@ -478,7 +478,7 @@ export default function SettingsPage() {
               : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
               }`}
           >
-            <span><BuildingComplex /></span>
+            <span><BuildingComplex size={12} /></span>
             <span>Şube Yönetimi</span>
             <span className="ml-1 px-1.5 py-0.5 rounded-full text-[10px] bg-slate-100 text-slate-700 font-mono">
               {branches.length}
@@ -492,7 +492,7 @@ export default function SettingsPage() {
               : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
               }`}
           >
-            <span><Shield /></span>
+            <span><Shield size={12} /></span>
             <span>RBAC Yetki Matrisi</span>
             {rbacHasChanges && (
               <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping"></span>
