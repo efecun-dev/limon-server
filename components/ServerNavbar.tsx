@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
+import { Bell, ChartPie, ClipboardClock, Cog } from "lucide-react"
 
 export function ServerNavbar() {
   const pathname = usePathname();
@@ -14,14 +15,14 @@ export function ServerNavbar() {
       try {
         const raw = localStorage.getItem("limon_user");
         if (raw) setUser(JSON.parse(raw));
-      } catch {}
+      } catch { }
     }
   }, []);
 
   const handleLogout = async () => {
     try {
       await fetch("/api/auth/logout", { method: "POST" });
-    } catch {}
+    } catch { }
     if (typeof window !== "undefined") {
       localStorage.removeItem("limon_user");
       localStorage.removeItem("limon_token");
@@ -31,22 +32,22 @@ export function ServerNavbar() {
   };
 
   const navItems = [
-    { href: "/", label: "Sistem Durumu", icon: "📊" },
-    { href: "/logs", label: "İstek Logları", icon: "📜" },
-    { href: "/notifications", label: "Bildirimler", icon: "🔔" },
-    { href: "/settings", label: "Ayarlar & RBAC", icon: "⚙️" },
+    { href: "/", label: "Sistem Durumu", icon: <ChartPie /> },
+    { href: "/logs", label: "İstek Logları", icon: <ClipboardClock /> },
+    { href: "/notifications", label: "Bildirimler", icon: <Bell /> },
+    { href: "/settings", label: "Ayarlar & RBAC", icon: <Cog /> },
   ];
 
   if (pathname === "/login") return null;
 
   return (
-    <header className="w-full bg-white border-b border-slate-200 sticky top-0 z-40 shadow-xs">
+    <header className="w-full bg-white border-b border-slate-200 sticky top-0 z-40 ">
       <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between gap-4">
-        
+
         {/* Sol Kısım: Logo & Aktif Port Rozeti */}
         <div className="flex items-center gap-3">
           <Link href="/" className="flex items-center gap-2.5 group">
-            <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white font-black text-sm flex items-center justify-center shadow-xs group-hover:bg-emerald-700 transition">
+            <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white font-black text-sm flex items-center justify-center  group-hover:bg-emerald-700 transition">
               L
             </div>
             <div>
@@ -71,11 +72,10 @@ export function ServerNavbar() {
               <Link
                 key={item.href}
                 href={item.href}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                  isActive
-                    ? "bg-emerald-50 text-emerald-800 border border-emerald-200 shadow-xs"
-                    : "text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-transparent"
-                }`}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${isActive
+                  ? "bg-emerald-50 text-emerald-800 border border-emerald-200 "
+                  : "text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-transparent"
+                  }`}
               >
                 <span>{item.icon}</span>
                 <span>{item.label}</span>

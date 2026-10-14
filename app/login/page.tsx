@@ -83,8 +83,8 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen w-full bg-gray-100 flex items-center justify-center p-4 font-sans text-gray-900 antialiased">
-      <div className="w-full max-w-sm bg-white border border-gray-300 rounded p-6 shadow-xs space-y-5">
-        
+      <div className="w-full max-w-sm bg-white border border-gray-300 rounded p-6  space-y-5">
+
         {/* Header */}
         <div className="text-center space-y-1">
           <div className="inline-flex items-center justify-center w-9 h-9 rounded bg-emerald-600 text-white font-bold text-base mb-1">

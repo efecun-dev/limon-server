@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { ServerNavbar } from "@/components/ServerNavbar";
+import { Bell, Package, RefreshCw, RotateCcw, Star, TriangleAlert } from "lucide-react";
 
 interface NotificationItem {
   id: string;
@@ -89,7 +90,7 @@ export default function NotificationsPage() {
       if (data.success) {
         setNotifications((prev) => prev.filter((n) => n.id !== id));
       }
-    } catch {}
+    } catch { }
   };
 
   const filtered = notifications.filter((n) => {
@@ -112,9 +113,9 @@ export default function NotificationsPage() {
       <ServerNavbar />
 
       <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
-        
+
         {/* Header */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white border border-slate-200 p-5 rounded-xl shadow-xs">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white border border-slate-200 p-5 rounded-xl ">
           <div>
             <div className="flex items-center gap-2">
               <h1 className="text-xl font-bold text-slate-900 tracking-tight">
@@ -131,30 +132,30 @@ export default function NotificationsPage() {
 
           <button
             onClick={fetchNotifications}
-            className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs transition cursor-pointer flex items-center gap-1.5 shadow-xs"
+            className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs transition cursor-pointer flex items-center gap-1.5 "
           >
-            <span>↻ Listeyi Yenile</span>
+            <span><RotateCcw /> Listeyi Yenile</span>
           </button>
         </div>
 
         {/* 4 Özet Kartı */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          <div className="bg-white border border-slate-200 p-4 rounded-xl shadow-xs">
+          <div className="bg-white border border-slate-200 p-4 rounded-xl ">
             <span className="text-xs font-medium text-slate-500">Toplam Kayıt</span>
             <span className="text-2xl font-black text-slate-900 block mt-1">{counts.all}</span>
             <span className="text-[11px] text-slate-400 mt-0.5 block">Veritabanında saklanan</span>
           </div>
-          <div className="bg-white border border-slate-200 p-4 rounded-xl shadow-xs">
+          <div className="bg-white border border-slate-200 p-4 rounded-xl ">
             <span className="text-xs font-medium text-amber-700">Müşteri Yorumları</span>
             <span className="text-2xl font-black text-amber-600 block mt-1">{counts.review}</span>
             <span className="text-[11px] text-slate-400 mt-0.5 block">Yorum yönetimi alarmları</span>
           </div>
-          <div className="bg-white border border-slate-200 p-4 rounded-xl shadow-xs">
+          <div className="bg-white border border-slate-200 p-4 rounded-xl ">
             <span className="text-xs font-medium text-rose-700">İade &amp; İptaller</span>
             <span className="text-2xl font-black text-rose-600 block mt-1">{counts.return + counts.cancellation}</span>
             <span className="text-[11px] text-slate-400 mt-0.5 block">Acil işlem bekleyenler</span>
           </div>
-          <div className="bg-white border border-slate-200 p-4 rounded-xl shadow-xs">
+          <div className="bg-white border border-slate-200 p-4 rounded-xl ">
             <span className="text-xs font-medium text-blue-700">Sipariş &amp; Sistem</span>
             <span className="text-2xl font-black text-blue-600 block mt-1">{counts.order + counts.system}</span>
             <span className="text-[11px] text-slate-400 mt-0.5 block">Sipariş akış kayıtları</span>
@@ -162,7 +163,7 @@ export default function NotificationsPage() {
         </div>
 
         {/* Test Bildirimi Gönderme Formu */}
-        <section className="bg-white border border-slate-200 p-5 rounded-xl shadow-xs space-y-3">
+        <section className="bg-white border border-slate-200 p-5 rounded-xl  space-y-3">
           <h2 className="text-sm font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
             Test Bildirimi Gönder (Canlı Doğrulama)
@@ -172,11 +173,10 @@ export default function NotificationsPage() {
           </p>
 
           {feedback && (
-            <div className={`p-2.5 rounded-lg text-xs font-bold border ${
-              feedback.startsWith("✓")
-                ? "bg-emerald-50 text-emerald-800 border-emerald-200"
-                : "bg-rose-50 text-rose-800 border-rose-200"
-            }`}>
+            <div className={`p-2.5 rounded-lg text-xs font-bold border ${feedback.startsWith("✓")
+              ? "bg-emerald-50 text-emerald-800 border-emerald-200"
+              : "bg-rose-50 text-rose-800 border-rose-200"
+              }`}>
               {feedback}
             </div>
           )}
@@ -189,11 +189,11 @@ export default function NotificationsPage() {
                 onChange={(e) => setTestType(e.target.value)}
                 className="w-full px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-slate-800 font-semibold outline-none focus:border-emerald-500"
               >
-                <option value="review">⭐ Yorum (Müşteri Değerlendirmesi)</option>
-                <option value="return">🔄 İade Talebi</option>
-                <option value="cancellation">⚠️ İptal Bildirimi</option>
-                <option value="order">📦 Yeni Sipariş</option>
-                <option value="system">🔔 Sistem Uyarısı</option>
+                <option value="review"><Star /> Yorum (Müşteri Değerlendirmesi)</option>
+                <option value="return"><RefreshCw /> İade Talebi</option>
+                <option value="cancellation"><TriangleAlert /> İptal Bildirimi</option>
+                <option value="order"><Package /> Yeni Sipariş</option>
+                <option value="system"><Bell /> Sistem Uyarısı</option>
               </select>
             </div>
 
@@ -225,7 +225,7 @@ export default function NotificationsPage() {
               <button
                 type="submit"
                 disabled={isSending}
-                className="w-full py-2 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold transition disabled:opacity-50 cursor-pointer shadow-xs"
+                className="w-full py-2 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold transition disabled:opacity-50 cursor-pointer "
               >
                 {isSending ? "..." : "Oluştur"}
               </button>
@@ -247,11 +247,10 @@ export default function NotificationsPage() {
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
-                activeTab === tab.id
-                  ? "bg-slate-900 text-white shadow-xs"
-                  : "bg-white hover:bg-slate-100 text-slate-600 border border-slate-200"
-              }`}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${activeTab === tab.id
+                ? "bg-slate-900 text-white "
+                : "bg-white hover:bg-slate-100 text-slate-600 border border-slate-200"
+                }`}
             >
               {tab.label}
             </button>
@@ -259,7 +258,7 @@ export default function NotificationsPage() {
         </div>
 
         {/* Bildirimler Tablosu */}
-        <section className="bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden">
+        <section className="bg-white border border-slate-200 rounded-xl  overflow-hidden">
           <div className="w-full overflow-x-auto">
             <table className="w-full text-left text-xs">
               <thead>
@@ -298,12 +297,12 @@ export default function NotificationsPage() {
                             {n.type === "review"
                               ? "YORUM"
                               : n.type === "return"
-                              ? "İADE"
-                              : n.type === "cancellation" || n.type === "cancel"
-                              ? "İPTAL"
-                              : n.type === "order"
-                              ? "SİPARİŞ"
-                              : "SİSTEM"}
+                                ? "İADE"
+                                : n.type === "cancellation" || n.type === "cancel"
+                                  ? "İPTAL"
+                                  : n.type === "order"
+                                    ? "SİPARİŞ"
+                                    : "SİSTEM"}
                           </span>
                         </td>
                         <td className="py-3 px-4">

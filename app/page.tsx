@@ -93,7 +93,7 @@ export default function Home() {
       if (data.success) {
         setNotifierState(data);
       }
-    } catch {}
+    } catch { }
   }, []);
 
   const fetchMetrics = useCallback(async () => {
@@ -101,7 +101,7 @@ export default function Home() {
       const res = await fetch("/api/system/metrics", { cache: "no-store" });
       const data = await res.json();
       setMetrics(data);
-    } catch {}
+    } catch { }
   }, []);
 
   useEffect(() => {
@@ -259,9 +259,9 @@ export default function Home() {
       <ServerNavbar />
 
       <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
-        
+
         {/* Üst Banner & Durum Özeti */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white border border-slate-200 p-5 rounded-xl shadow-xs">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white border border-slate-200 p-5 rounded-xl ">
           <div>
             <div className="flex items-center gap-2">
               <h1 className="text-xl font-bold text-slate-900 tracking-tight">
@@ -292,7 +292,7 @@ export default function Home() {
             <button
               onClick={fetchHealth}
               disabled={isRefreshing}
-              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold transition cursor-pointer flex items-center gap-1.5 shadow-xs disabled:opacity-50"
+              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold transition cursor-pointer flex items-center gap-1.5  disabled:opacity-50"
               title="Sunucu Durumunu Yenile"
             >
               <span className={isRefreshing ? "animate-spin" : ""}>↻</span>
@@ -303,7 +303,7 @@ export default function Home() {
 
         {/* 4 Hero KPI Kartı */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-white border border-slate-200 p-4 rounded-xl shadow-xs">
+          <div className="bg-white border border-slate-200 p-4 rounded-xl ">
             <div className="flex items-center justify-between text-xs text-slate-500 font-medium">
               <span>Sistem Sağlığı</span>
               <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
@@ -316,7 +316,7 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="bg-white border border-slate-200 p-4 rounded-xl shadow-xs">
+          <div className="bg-white border border-slate-200 p-4 rounded-xl ">
             <div className="flex items-center justify-between text-xs text-slate-500 font-medium">
               <span>Aktif Entegrasyonlar</span>
               <span className="text-emerald-600 font-bold">6/6</span>
@@ -329,7 +329,7 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="bg-white border border-slate-200 p-4 rounded-xl shadow-xs">
+          <div className="bg-white border border-slate-200 p-4 rounded-xl ">
             <div className="flex items-center justify-between text-xs text-slate-500 font-medium">
               <span>Tepki Süresi</span>
               <span className="text-slate-400 font-mono">Döngü</span>
@@ -343,7 +343,7 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="bg-white border border-slate-200 p-4 rounded-xl shadow-xs">
+          <div className="bg-white border border-slate-200 p-4 rounded-xl ">
             <div className="flex items-center justify-between text-xs text-slate-500 font-medium">
               <span>Güvenlik &amp; Yetki</span>
               <span className="text-emerald-600 font-bold">Aktif</span>
@@ -358,7 +358,7 @@ export default function Home() {
         </div>
 
         {/* 90-Günlük Kesintisiz Çalışma (Uptime) Tablosu */}
-        <section className="bg-white border border-slate-200 p-5 rounded-xl shadow-xs space-y-4">
+        <section className="bg-white border border-slate-200 p-5 rounded-xl  space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
             <div>
               <h2 className="text-sm font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
@@ -422,7 +422,7 @@ export default function Home() {
         </section>
 
         {/* Telegram Alarm & Hızlı Eylem Paneli */}
-        <section className="bg-white border border-slate-200 p-5 rounded-xl shadow-xs">
+        <section className="bg-white border border-slate-200 p-5 rounded-xl ">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3 mb-4">
             <div>
               <h2 className="text-sm font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
@@ -435,18 +435,17 @@ export default function Home() {
             </div>
 
             <div className="flex items-center gap-2">
-              <span className={`px-2 py-0.5 rounded text-xs font-bold ${
-                notifierState?.isRunning
+              <span className={`px-2 py-0.5 rounded text-xs font-bold ${notifierState?.isRunning
                   ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
                   : "bg-slate-100 text-slate-600 border border-slate-200"
-              }`}>
+                }`}>
                 {notifierState?.isRunning ? "● Tarama Aktif" : "Durduruldu"}
               </span>
 
               <button
                 onClick={handleSendTestMessage}
                 disabled={isSendingTest}
-                className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition disabled:opacity-50 cursor-pointer shadow-xs flex items-center gap-1.5"
+                className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition disabled:opacity-50 cursor-pointer  flex items-center gap-1.5"
               >
                 <span>{isSendingTest ? "Gönderiliyor..." : "Test Mesajı Gönder ✉"}</span>
               </button>
@@ -454,11 +453,10 @@ export default function Home() {
           </div>
 
           {testResult && (
-            <div className={`p-2.5 rounded-lg text-xs font-bold mb-3 border ${
-              testResult.startsWith("✓")
+            <div className={`p-2.5 rounded-lg text-xs font-bold mb-3 border ${testResult.startsWith("✓")
                 ? "bg-emerald-50 text-emerald-800 border-emerald-200"
                 : "bg-rose-50 text-rose-800 border-rose-200"
-            }`}>
+              }`}>
               {testResult}
             </div>
           )}
@@ -486,7 +484,7 @@ export default function Home() {
         </section>
 
         {/* API Uç Noktaları Kataloğu */}
-        <section className="bg-white border border-slate-200 p-5 rounded-xl shadow-xs space-y-3">
+        <section className="bg-white border border-slate-200 p-5 rounded-xl  space-y-3">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
             <div>
               <h2 className="text-sm font-bold text-slate-900 uppercase tracking-wider">
@@ -525,15 +523,14 @@ export default function Home() {
                   <tr key={idx} className="hover:bg-slate-50 transition">
                     <td className="py-2.5 px-3">
                       <span
-                        className={`px-2 py-0.5 rounded text-[10px] font-black ${
-                          ep.method === "POST"
+                        className={`px-2 py-0.5 rounded text-[10px] font-black ${ep.method === "POST"
                             ? "bg-emerald-100 text-emerald-800 border border-emerald-300"
                             : ep.method === "PATCH"
-                            ? "bg-amber-100 text-amber-800 border border-amber-300"
-                            : ep.method === "DELETE"
-                            ? "bg-rose-100 text-rose-800 border border-rose-300"
-                            : "bg-sky-100 text-sky-800 border border-sky-300"
-                        }`}
+                              ? "bg-amber-100 text-amber-800 border border-amber-300"
+                              : ep.method === "DELETE"
+                                ? "bg-rose-100 text-rose-800 border border-rose-300"
+                                : "bg-sky-100 text-sky-800 border border-sky-300"
+                          }`}
                       >
                         {ep.method}
                       </span>
