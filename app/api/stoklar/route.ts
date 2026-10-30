@@ -32,6 +32,8 @@ export async function GET(request: Request) {
         if (cachedData) {
           return NextResponse.json(JSON.parse(cachedData));
         }
+      } else {
+        await redis.del(cacheKey).catch(() => null);
       }
 
       const headers = {
@@ -126,10 +128,10 @@ export async function GET(request: Request) {
           size: mergedContent.length,
           totalElements: mergedContent.length,
           totalPages: 1,
-          catalogTotal: 2171,
-          totalStores: 12,
+          catalogTotal: refRes.data?.totalElements || mergedContent.length,
+          totalStores: fetchStoreIds.length,
           globalStats: {
-            totalProducts: 2171,
+            totalProducts: refRes.data?.totalElements || mergedContent.length,
             sumTotalStock: 340321,
             critical: 76,
             outOfStock: 579,
