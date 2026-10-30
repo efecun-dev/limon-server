@@ -1,16 +1,20 @@
 import { NextResponse } from "next/server";
 import axios from "axios";
 import { redis } from "@/lib/redis";
+import { BRANCHES } from "@/lib/branches";
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const storeIdsParam = searchParams.get("storeIds");
 
-  if (!storeIdsParam) {
-    return NextResponse.json({ error: "Store IDs belirtilmedi." }, { status: 400 });
-  }
+  // storeIdsParam boş ise 12 şubenin tamamını varsayılan olarak al
+  const storeIds = storeIdsParam
+    ? storeIdsParam.split(",").map((s) => s.trim()).filter(Boolean)
+    : Object.keys(BRANCHES);
 
-  const storeIds = storeIdsParam.split(",");
+  if (storeIds.length === 0) {
+    return NextResponse.json({ content: [], totalElements: 0, totalPages: 0 });
+  }
   const apiKey = process.env.TRENDYOL_API_KEY;
   const apiSecret = process.env.TRENDYOL_API_SECRET;
   const token = process.env.TRENDYOL_TOKEN;
@@ -71,8 +75,8 @@ export async function GET(request: Request) {
       totalPages: 1,
     };
 
-    // Cache for 30 seconds to avoid hitting API limit during polling
-    await redis.set(cacheKey, JSON.stringify(responseData), 'EX', 30).catch(() => null);
+    // Cache for 180 seconds (3 minutes) to avoid hitting API limit
+    await redis.set(cacheKey, JSON.stringify(responseData), 'EX', 180).catch(() => null);
 
     return NextResponse.json(responseData);
   } catch (error: any) {

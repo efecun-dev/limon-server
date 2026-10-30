@@ -24,6 +24,7 @@ export async function GET(request: Request) {
   const pageParam = parseInt(searchParams.get("page") || "0", 10);
   const sizeParam = parseInt(searchParams.get("size") || "50", 10);
   const fetchDays = parseInt(searchParams.get("fetchDays") || "0", 10);
+  const refreshParam = searchParams.get("refresh") === "true";
   const cleanOrderNumber = orderNumber ? orderNumber.trim().replace(/^#/, "") : "";
 
   // 1. Doğrudan Veritabanı Sorgusu İstenmişse (source=db veya all=true ve Trendyol atlanmak isteniyorsa)
@@ -59,9 +60,13 @@ export async function GET(request: Request) {
         ? `orders:${supplierId}:days:${fetchDays}:all:${allParam}`
         : `orders:${supplierId}:p:${pageParam}:s:${sizeParam}:store:${storeIdParam || "all"}:status:${statusParam || "all"}`;
       
-      const cachedData = await redis.get(cacheKey).catch(() => null);
-      if (cachedData) {
-        return NextResponse.json(JSON.parse(cachedData));
+      if (!refreshParam) {
+        const cachedData = await redis.get(cacheKey).catch(() => null);
+        if (cachedData) {
+          return NextResponse.json(JSON.parse(cachedData));
+        }
+      } else {
+        await redis.del(cacheKey).catch(() => null);
       }
 
       let filteredContent: any[] = [];
@@ -71,35 +76,67 @@ export async function GET(request: Request) {
       if (fetchDays > 0 || allParam) {
         const effectiveDays = allParam ? 3650 : fetchDays; // all ise 10 yıllık havuz
         const cutoffDate = Date.now() - effectiveDays * 24 * 60 * 60 * 1000;
-        let keepFetching = true;
-        let page = 0;
+        const headers = {
+          Authorization: `Basic ${process.env.TRENDYOL_TOKEN}`,
+          "x-agentname": agentName,
+          "x-executor-user": executorUser,
+        };
 
-        // a. Trendyol'dan son 30-35 günün canlı paketlerini çek
-        while (keepFetching && page < totalPages) {
-          const response = await axios.get(
-            `https://api.tgoapis.com/integrator/order/grocery/suppliers/${supplierId}/packages`,
-            {
-              headers: {
-                Authorization: `Basic ${process.env.TRENDYOL_TOKEN}`,
-                "x-agentname": agentName,
-                "x-executor-user": executorUser,
-              },
-              params: { size: 200, page },
-            }
-          );
+        // a. Trendyol'dan son 30-35 günün canlı paketlerini optimize paralel çek
+        // İlk sayfayı çekip toplam sayfa adedini öğrenelim
+        const firstRes = await axios.get(
+          `https://api.tgoapis.com/integrator/order/grocery/suppliers/${supplierId}/packages`,
+          {
+            headers,
+            params: { size: 200, page: 0 },
+            timeout: 12000,
+          }
+        );
 
-          if (response.data?.content && response.data.content.length > 0) {
-            filteredContent = filteredContent.concat(response.data.content);
-            const lastItem = response.data.content[response.data.content.length - 1];
-            if (lastItem && lastItem.orderDate < cutoffDate) {
-              keepFetching = false;
-            }
-          } else {
-            keepFetching = false;
+        const page0Content: any[] = firstRes.data?.content || [];
+        filteredContent.push(...page0Content);
+        totalPages = firstRes.data?.totalPages || 1;
+
+        // Kalan sayfaları 4'erli paketler halinde PARALEL sorgula (15 sn yerine ~1.5 sn)
+        if (totalPages > 1) {
+          const remainingPages = Array.from({ length: totalPages - 1 }, (_, i) => i + 1);
+          const chunkSize = 4;
+          let reachedCutoff = false;
+
+          const lastItemP0 = page0Content[page0Content.length - 1];
+          if (lastItemP0 && lastItemP0.orderDate < cutoffDate) {
+            reachedCutoff = true;
           }
 
-          totalPages = response.data?.totalPages || 1;
-          page++;
+          for (let i = 0; i < remainingPages.length && !reachedCutoff; i += chunkSize) {
+            const chunk = remainingPages.slice(i, i + chunkSize);
+            const chunkResults = await Promise.all(
+              chunk.map((p) =>
+                axios
+                  .get(
+                    `https://api.tgoapis.com/integrator/order/grocery/suppliers/${supplierId}/packages`,
+                    {
+                      headers,
+                      params: { size: 200, page: p },
+                      timeout: 12000,
+                    }
+                  )
+                  .then((r) => r.data?.content || [])
+                  .catch((e) => {
+                    console.warn(`[Siparisler] Paket sayfa ${p} hatası:`, e.message);
+                    return [];
+                  })
+              )
+            );
+
+            for (const items of chunkResults) {
+              filteredContent.push(...items);
+              const last = items[items.length - 1];
+              if (last && last.orderDate < cutoffDate) {
+                reachedCutoff = true;
+              }
+            }
+          }
         }
 
         // Sadece istenen süre içindeki siparişleri tut
@@ -112,31 +149,33 @@ export async function GET(request: Request) {
           });
         }
 
-        // c. Trendyol'un canlı havuzundan düşmüş eski siparişleri Supabase'den tamamla
-        // (Trendyol 35 günden eskisini vermez, o yüzden Supabase'deki eski siparişleri ekliyoruz)
-        try {
-          const dbOlderOrders = await OrderStorage.queryOrders({
-            storeId: storeIdParam,
-            status: statusParam,
-            startDate: cutoffDate,
-            endDate: Date.now(),
-            all: true,
-          });
+        // c. Trendyol'un 35 günlük penceresinden daha eski sipariş isteniyorsa Supabase'den tamamla
+        const thirtyFiveDaysAgo = Date.now() - 35 * 24 * 60 * 60 * 1000;
+        if (cutoffDate < thirtyFiveDaysAgo || allParam) {
+          try {
+            const dbOlderOrders = await OrderStorage.queryOrders({
+              storeId: storeIdParam,
+              status: statusParam,
+              startDate: cutoffDate,
+              endDate: thirtyFiveDaysAgo,
+              all: true,
+            });
 
-          if (dbOlderOrders.content && dbOlderOrders.content.length > 0) {
-            const seenIds = new Set(filteredContent.map((p) => String(p.id || p.orderNumber)));
-            for (const oldPkg of dbOlderOrders.content) {
-              const id = String(oldPkg.id || oldPkg.orderNumber);
-              if (!seenIds.has(id)) {
-                seenIds.add(id);
-                filteredContent.push(oldPkg);
+            if (dbOlderOrders.content && dbOlderOrders.content.length > 0) {
+              const seenIds = new Set(filteredContent.map((p) => String(p.id || p.orderNumber)));
+              for (const oldPkg of dbOlderOrders.content) {
+                const id = String(oldPkg.id || oldPkg.orderNumber);
+                if (!seenIds.has(id)) {
+                  seenIds.add(id);
+                  filteredContent.push(oldPkg);
+                }
               }
+              // Tarihe göre yeniden sırala (en yeniden en eskiye)
+              filteredContent.sort((a, b) => (b.orderDate || 0) - (a.orderDate || 0));
             }
-            // Tarihe göre yeniden sırala (en yeniden en eskiye)
-            filteredContent.sort((a, b) => (b.orderDate || 0) - (a.orderDate || 0));
+          } catch (dbErr: any) {
+            console.warn("[Siparisler] Supabase tamamlayıcı okuma hatası:", dbErr.message);
           }
-        } catch (dbErr: any) {
-          console.warn("[Siparisler] Supabase tamamlayıcı okuma hatası:", dbErr.message);
         }
 
         totalElements = filteredContent.length;
@@ -239,8 +278,8 @@ export async function GET(request: Request) {
         executorUser,
       };
 
-      // Kısa süreli Redis Cache
-      await redis.set(cacheKey, JSON.stringify(responseData), "EX", 10).catch(() => null);
+      // 180 saniyelik (3 dakika) Redis Cache (Önceki 10 saniyeydi!)
+      await redis.set(cacheKey, JSON.stringify(responseData), "EX", 180).catch(() => null);
 
       return NextResponse.json(responseData);
     } catch (error: any) {
