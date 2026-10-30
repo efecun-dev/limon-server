@@ -3,6 +3,7 @@ import { redis } from "@/lib/redis";
 import { sendTelegramMessage } from "@/lib/telegram";
 import { getTelegramNotifier } from "@/lib/telegram-notifier";
 import { getEventBroadcaster } from "@/lib/event-broadcaster";
+import { OrderStorage } from "@/lib/order-storage";
 
 export async function POST(req: NextRequest) {
   try {
@@ -47,9 +48,14 @@ export async function POST(req: NextRequest) {
     // 24 saat boyunca işlenmiş olarak işaretle
     await redis.set(idempotencyKey, "1", "EX", 86400);
 
-    // 4. Aksiyonlar (Cache Temizleme ve Telegram Bildirimi)
+    // 4. Aksiyonlar (Supabase Kaydı, Cache Temizleme ve Telegram Bildirimi)
     
-    // a. Frontend'in sipariş listesini hızlıca yenilemesi için Cache temizle
+    // a. Supabase veritabanına kalıcı olarak kaydet / güncelle
+    OrderStorage.upsertPackages([body], "webhook").catch((err) => {
+      console.warn("[Webhook] Supabase sipariş kaydı hatası:", err.message);
+    });
+
+    // b. Frontend'in sipariş listesini hızlıca yenilemesi için Cache temizle
     const supplierId = process.env.TRENDYOL_GO_SUPPLIER_ID;
     if (supplierId) {
       await redis.del(`orders:${supplierId}`);

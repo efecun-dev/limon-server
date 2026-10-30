@@ -3,8 +3,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 enum Role {
@@ -83,3 +84,38 @@ model UserNotificationRead {
   @@map("user_notification_reads")
 }
 
+model Order {
+  id                  String   @id // packageId veya orderId/custom ID
+  orderNumber         String   // Trendyol sipariş numarası
+  packageNumber       String?  // Paket numarası
+  orderDate           DateTime // Sipariş tarihi (tarih filtreleri için)
+  orderDateMs         BigInt   // Unix timestamp (ms) - hızlı sıralama için
+  storeId             String   // Trendyol Mağaza / Şube ID
+  storeName           String?  // Şube adı (örn: "Limon-2 Süpermarket Atakum")
+  packageStatus       String   // "Delivered", "Cancelled", "Picking", "Created" vb.
+  totalPrice          Float    @default(0) // Müşterinin ödediği nihai tutar
+  grossAmount         Float    @default(0) // Brüt tutar
+  totalDiscount       Float    @default(0) // İndirim tutarı
+  sellerInvoiceAmount Float?   @default(0) // Fatura / Hakediş tutarı
+  currencyCode        String   @default("TRY")
+  customerName        String?  // Müşteri Adı Soyadı
+  customerPhone       String?  // Telefon (varsa)
+  customerCity        String?  // Şehir
+  customerDistrict    String?  // İlçe
+  deliveryModel       String?  // "STORE" vb.
+  itemCount           Int      @default(0) // Ürün adedi
+  itemsSummary        String?  // Satırlardaki ürünlerin isimleri (hızlı arama için)
+  cancelReason        String?  // Varsa iptal nedeni
+  source              String   @default("trendyol_api") // "trendyol_api", "webhook", "excel_import"
+  rawData             Json?    // Trendyol ham paket JSON verisi (satırlar, barkodlar, fiyatlar, adresler)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([orderDate])
+  @@index([orderDateMs])
+  @@index([storeId])
+  @@index([packageStatus])
+  @@index([orderNumber])
+  @@index([source])
+  @@map("orders")
+}
