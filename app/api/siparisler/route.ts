@@ -53,11 +53,13 @@ export async function GET(request: Request) {
   // 2. Canlı Trendyol Entegrasyonu ve Hibrit Supabase Birleştirmesi
   if (supplierId && agentName && executorUser) {
     try {
-      // Önbellek Anahtarı (Canlı veri için kısa süreli)
+      // Önbellek Anahtarı (all, fetchDays ve sayfalamayı kesin olarak ayırır)
       const cacheKey = cleanOrderNumber
         ? `orders:${supplierId}:${cleanOrderNumber}:store:${storeIdParam || "all"}:status:${statusParam || "all"}`
+        : allParam
+        ? `orders:${supplierId}:all:store:${storeIdParam || "all"}:status:${statusParam || "all"}`
         : fetchDays > 0
-        ? `orders:${supplierId}:days:${fetchDays}:all:${allParam}`
+        ? `orders:${supplierId}:days:${fetchDays}:store:${storeIdParam || "all"}:status:${statusParam || "all"}`
         : `orders:${supplierId}:p:${pageParam}:s:${sizeParam}:store:${storeIdParam || "all"}:status:${statusParam || "all"}`;
       
       if (!refreshParam) {
@@ -278,8 +280,9 @@ export async function GET(request: Request) {
         executorUser,
       };
 
-      // 180 saniyelik (3 dakika) Redis Cache (Önceki 10 saniyeydi!)
-      await redis.set(cacheKey, JSON.stringify(responseData), "EX", 180).catch(() => null);
+      // all=true için 10 dakika (600s), anlık bugün (fetchDays=1) için 45s, normal için 180s Redis önbelleği
+      const ttl = allParam ? 600 : fetchDays === 1 ? 45 : 180;
+      await redis.set(cacheKey, JSON.stringify(responseData), "EX", ttl).catch(() => null);
 
       return NextResponse.json(responseData);
     } catch (error: any) {
