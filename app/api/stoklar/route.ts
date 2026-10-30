@@ -138,8 +138,8 @@ export async function GET(request: Request) {
           },
         };
 
-        // 60 saniyelik önbellek
-        await redis.set(cacheKey, JSON.stringify(responseData), "EX", 60).catch(() => null);
+        // 300 saniyelik (5 dakika) önbellek
+        await redis.set(cacheKey, JSON.stringify(responseData), "EX", 300).catch(() => null);
         return NextResponse.json(responseData);
       }
 
@@ -230,8 +230,8 @@ export async function GET(request: Request) {
         },
       };
 
-      // 15 saniyelik kısa önbellek
-      await redis.set(cacheKey, JSON.stringify(responseData), "EX", 15).catch(() => null);
+      // 180 saniyelik (3 dakika) önbellek
+      await redis.set(cacheKey, JSON.stringify(responseData), "EX", 180).catch(() => null);
 
       return NextResponse.json(responseData);
     } catch (error: any) {

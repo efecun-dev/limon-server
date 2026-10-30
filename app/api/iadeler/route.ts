@@ -7,6 +7,7 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const statusFilter = searchParams.get("claimItemStatus") || "";
+  const refresh = searchParams.get("refresh") === "true";
 
   const supplierId = process.env.TRENDYOL_GO_SUPPLIER_ID;
   const agentName = process.env.TRENDYOL_GO_AGENTNAME;
@@ -15,10 +16,14 @@ export async function GET(request: Request) {
   if (supplierId && agentName && executorUser) {
     try {
       const cacheKey = `claims:${supplierId}:${statusFilter}`;
-      const cachedData = await redis.get(cacheKey).catch(() => null);
       
-      if (cachedData) {
-        return NextResponse.json(JSON.parse(cachedData));
+      if (!refresh) {
+        const cachedData = await redis.get(cacheKey).catch(() => null);
+        if (cachedData) {
+          return NextResponse.json(JSON.parse(cachedData));
+        }
+      } else {
+        await redis.del(cacheKey).catch(() => null);
       }
 
       // Tüm sayfaları çek
@@ -100,7 +105,8 @@ export async function GET(request: Request) {
         totalElements: allContent.length,
       };
       
-      await redis.set(cacheKey, JSON.stringify(responseData), 'EX', 15).catch(() => null);
+      // 180 saniyelik (3 dakika) önbellek
+      await redis.set(cacheKey, JSON.stringify(responseData), 'EX', 180).catch(() => null);
       
       return NextResponse.json(responseData);
     } catch (error: any) {
