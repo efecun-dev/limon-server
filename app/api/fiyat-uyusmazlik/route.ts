@@ -41,31 +41,46 @@ export async function GET(request: Request) {
     const branchList = Object.entries(BRANCHES).map(([id, name]) => ({ id, name }));
     const productMap = new Map<string, any>();
 
-    // Şubelerden paralel ürün & fiyat çekimi (İlk 100 ürün üzerinden katalog taraması)
+    // Şubelerden paralel ürün & fiyat çekimi (TÜM KATALOG TARAMASI - Sayfalamalı)
     const storePromises = branchList.map(async (branch) => {
+      const branchProducts: any[] = [];
+      let page = 0;
+      let totalPages = 1;
+      const pageSize = 100;
+
       try {
-        const res = await axios.get(
-          `https://api.tgoapis.com/integrator/product/grocery/suppliers/${supplierId}/stores/${branch.id}/products`,
-          {
-            headers,
-            params: {
-              size: 100,
-              page: 0,
-            },
-            timeout: 12000,
-          }
-        );
+        while (page < totalPages && page < 25) { // Maksimum 2500 ürün/şube güvenli sınır
+          const res = await axios.get(
+            `https://api.tgoapis.com/integrator/product/grocery/suppliers/${supplierId}/stores/${branch.id}/products`,
+            {
+              headers,
+              params: {
+                size: pageSize,
+                page,
+              },
+              timeout: 15000,
+            }
+          );
+
+          const content = res.data?.content || [];
+          branchProducts.push(...content);
+          totalPages = typeof res.data?.totalPages === "number" ? res.data.totalPages : 1;
+          page++;
+
+          if (content.length === 0 || page >= totalPages) break;
+        }
+
         return {
           storeId: branch.id,
           storeName: branch.name,
-          products: res.data?.content || [],
+          products: branchProducts,
         };
       } catch (err: any) {
         console.warn(`[FiyatUyuşmazlık] Şube ${branch.id} (${branch.name}) çekilemedi:`, err.message);
         return {
           storeId: branch.id,
           storeName: branch.name,
-          products: [],
+          products: branchProducts,
         };
       }
     });
@@ -196,7 +211,7 @@ export async function GET(request: Request) {
     };
 
     try {
-      await redis.set(cacheKey, JSON.stringify(result), "EX", 300);
+      await redis.set(cacheKey, JSON.stringify(result), "EX", 1800);
     } catch (e) {}
 
     return NextResponse.json(result);

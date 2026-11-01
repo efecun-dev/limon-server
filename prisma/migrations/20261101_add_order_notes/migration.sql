@@ -20,3 +20,4 @@ CREATE INDEX IF NOT EXISTS "order_notes_orderNumber_idx" ON "order_notes"("order
 
 -- CreateIndex
 CREATE INDEX IF NOT EXISTS "order_notes_createdAt_idx" ON "order_notes"("createdAt");
+
