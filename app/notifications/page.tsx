@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { ServerNavbar } from "@/components/ServerNavbar";
+import { ServerFooter } from "@/components/ServerFooter";
 import { Bell, Package, RefreshCw, RotateCcw, Star, TriangleAlert } from "lucide-react";
 
 interface NotificationItem {
@@ -346,6 +347,8 @@ export default function NotificationsPage() {
         </section>
 
       </main>
+
+      <ServerFooter />
     </div>
   );
 }

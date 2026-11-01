@@ -1,7 +1,7 @@
 import axios from "axios";
 import { redis } from "@/lib/redis";
 
-const FIFTEEN_DAYS_MS = 14 * 24 * 60 * 60 * 1000; // 14 günlük güvenli dilimler (Trendyol maks 15 gün sınırı)
+const FIFTEEN_DAYS_MS = 13 * 24 * 60 * 60 * 1000; // 13 günlük dilimler (Trendyol 15 gün sınırına tam uyumlu)
 
 export const SETTLEMENT_TRANSACTION_TYPES = [
   "Sale",
@@ -32,7 +32,6 @@ export const OTHER_TRANSACTION_TYPES = [
 export type SettlementType = (typeof SETTLEMENT_TRANSACTION_TYPES)[number];
 export type OtherType = (typeof OTHER_TRANSACTION_TYPES)[number];
 
-// Single-flight in-flight request cache
 const inFlightRequests = new Map<string, Promise<any>>();
 
 function getChunks(startDate: number, endDate: number): Array<{ start: number; end: number }> {
@@ -62,7 +61,7 @@ export class FinansService {
   }
 
   /**
-   * Trendyol Settlements API'sinden belirli bir işlem tipini 15 günlük aralıklarla ve sayfalamayla çeker.
+   * Trendyol Settlements API'sinden belirli bir işlem tipini çeker (Strict size=500).
    */
   static async fetchSettlementsForType(
     transactionType: SettlementType,
@@ -71,9 +70,7 @@ export class FinansService {
     domain: "grocery" | "meal" = "grocery"
   ): Promise<any[]> {
     const supplierId = this.getSupplierId();
-    if (!supplierId || !process.env.TRENDYOL_TOKEN) {
-      return [];
-    }
+    if (!supplierId || !process.env.TRENDYOL_TOKEN) return [];
 
     const chunks = getChunks(startDate, endDate);
     const allRecords: any[] = [];
@@ -93,13 +90,13 @@ export class FinansService {
               startDate: chunk.start,
               endDate: chunk.end,
               page,
-              size: 500,
+              size: 500, // Trendyol kesin kuralı: 500 veya 1000 olmalı
             },
             timeout: 15000,
           });
 
           const data = res.data;
-          const items = Array.isArray(data) ? data : data?.content || data?.elements || [];
+          const items = Array.isArray(data) ? data : data?.content || [];
           totalPages = typeof data?.totalPages === "number" ? data.totalPages : 1;
 
           for (const item of items) {
@@ -112,7 +109,7 @@ export class FinansService {
 
           page++;
         } catch (err: any) {
-          console.warn(`[FinansService] Settlements ${transactionType} chunk (${chunk.start}-${chunk.end}) sayfa ${page} hatası:`, err.message);
+          console.warn(`[FinansService] Settlements ${transactionType} chunk hata:`, err.message);
           break;
         }
       }
@@ -122,7 +119,7 @@ export class FinansService {
   }
 
   /**
-   * Trendyol Otherfinancials API'sinden belirli bir işlem tipini 15 günlük dilimlerle çeker.
+   * Trendyol Otherfinancials API'sinden belirli bir işlem tipini çeker (Strict size=500).
    */
   static async fetchOtherFinancialsForType(
     transactionType: OtherType,
@@ -131,9 +128,7 @@ export class FinansService {
     domain: "grocery" | "meal" = "grocery"
   ): Promise<any[]> {
     const supplierId = this.getSupplierId();
-    if (!supplierId || !process.env.TRENDYOL_TOKEN) {
-      return [];
-    }
+    if (!supplierId || !process.env.TRENDYOL_TOKEN) return [];
 
     const chunks = getChunks(startDate, endDate);
     const allRecords: any[] = [];
@@ -153,13 +148,13 @@ export class FinansService {
               startDate: chunk.start,
               endDate: chunk.end,
               page,
-              size: 500,
+              size: 500, // Trendyol kesin kuralı: 500 veya 1000 olmalı
             },
             timeout: 15000,
           });
 
           const data = res.data;
-          const items = Array.isArray(data) ? data : data?.content || data?.elements || [];
+          const items = Array.isArray(data) ? data : data?.content || [];
           totalPages = typeof data?.totalPages === "number" ? data.totalPages : 1;
 
           for (const item of items) {
@@ -172,7 +167,7 @@ export class FinansService {
 
           page++;
         } catch (err: any) {
-          console.warn(`[FinansService] Otherfinancials ${transactionType} chunk sayfa ${page} hatası:`, err.message);
+          console.warn(`[FinansService] Otherfinancials ${transactionType} chunk hata:`, err.message);
           break;
         }
       }
@@ -182,13 +177,12 @@ export class FinansService {
   }
 
   /**
-   * Tüm Finansal Kayıtları Çeker, Önbellekler ve Rapor Özetini Hesaplar (Single-Flight & Coalescing Destekli)
+   * Tüm Finansal Kayıtları Çeker, Sınıflandırır ve Sunucu Tarafında Hesaplar (Bölüm 6.1, 6.2, 6.3)
    */
   static async getFinancialSummary(startDate: number, endDate: number, refresh = false) {
     const supplierId = this.getSupplierId();
-    const cacheKey = `finans_summary:${supplierId}:${startDate}:${endDate}`;
+    const cacheKey = `finans_summary_v2:${supplierId}:${startDate}:${endDate}`;
 
-    // 1. Önbellek Kontrolü (Değişmeyen geçmiş dönemler için uzun TTL)
     if (!refresh) {
       try {
         const cached = await redis.get(cacheKey);
@@ -198,34 +192,35 @@ export class FinansService {
       } catch (e) {}
     }
 
-    // 2. Single-Flight Coalescing (Aynı anda gelen isteklerin mükerrer hesaplama yapmasını engeller)
     if (inFlightRequests.has(cacheKey)) {
       return inFlightRequests.get(cacheKey)!;
     }
 
     const workPromise = (async () => {
       try {
-        // Settlements kayıtlarını çek
+        // Settlements paralel çekimi
         const settlementResults: Record<string, any[]> = {};
         for (const type of SETTLEMENT_TRANSACTION_TYPES) {
           settlementResults[type] = await this.fetchSettlementsForType(type, startDate, endDate);
         }
 
-        // Otherfinancials kayıtlarını çek
+        // Otherfinancials paralel çekimi
         const otherResults: Record<string, any[]> = {};
         for (const type of OTHER_TRANSACTION_TYPES) {
           otherResults[type] = await this.fetchOtherFinancialsForType(type, startDate, endDate);
         }
 
-        // --- HESAPLAMA MOTORU (Trendyol Resmi Kılavuz Mantığı) ---
+        // ── HESAPLAMA MOTORU ──
         let totalSales = 0;
         let totalReturns = 0;
         let totalDiscounts = 0;
         let totalDiscountCancels = 0;
         let totalCoupons = 0;
         let totalCouponCancels = 0;
-        let totalProvisionPositive = 0;
-        let totalProvisionNegative = 0;
+
+        // Tanzim & Provizyon Kalemleri (Bölüm 6.2)
+        let tanzimRevenue = 0;     // ProvisionPositive (Provizyon + Tanzim Geliri)
+        let tanzimDeduction = 0;   // ProvisionNegative (Provizyon - Tanzim Kesintisi)
         let totalManualRefunds = 0;
         let totalDeliveryFees = 0;
         let totalDeliveryFeeCancels = 0;
@@ -233,25 +228,48 @@ export class FinansService {
         let totalSellerRevenue = 0;
 
         const allTransactions: any[] = [];
+        const branchFinancialMap: Record<string, any> = {};
 
-        // Settlements İşleme
+        // 1. Settlements İşleme
         for (const [type, items] of Object.entries(settlementResults)) {
           for (const item of items) {
-            const amount = Number(item.credit || item.debt || item.amount || 0);
+            const debt = Number(item.debt || 0);
+            const credit = Number(item.credit || 0);
+            const amount = credit > 0 ? credit : debt;
             const comm = Math.abs(Number(item.commissionAmount || 0));
             const rev = Number(item.sellerRevenue || 0);
+            const rate = typeof item.commissionRate === "number" ? item.commissionRate : 0;
 
-            // Bakiye & Tutar Toplamları
+            const storeId = String(item.storeId || item.sellerId || "genel");
+            const storeName = item.storeName || "Genel";
+
+            if (!branchFinancialMap[storeId]) {
+              branchFinancialMap[storeId] = {
+                storeId,
+                storeName,
+                sales: 0,
+                returns: 0,
+                commission: 0,
+                sellerRevenue: 0,
+                orderCount: 0,
+              };
+            }
+
             switch (type) {
               case "Sale":
                 totalSales += amount;
                 totalCommission += comm;
                 totalSellerRevenue += rev > 0 ? rev : amount - comm;
+                branchFinancialMap[storeId].sales += amount;
+                branchFinancialMap[storeId].commission += comm;
+                branchFinancialMap[storeId].sellerRevenue += rev > 0 ? rev : amount - comm;
+                branchFinancialMap[storeId].orderCount++;
                 break;
               case "Return":
                 totalReturns += amount;
                 totalCommission -= comm;
                 totalSellerRevenue -= rev > 0 ? rev : amount - comm;
+                branchFinancialMap[storeId].returns += amount;
                 break;
               case "Discount":
                 totalDiscounts += amount;
@@ -266,10 +284,10 @@ export class FinansService {
                 totalCouponCancels += amount;
                 break;
               case "ProvisionPositive":
-                totalProvisionPositive += amount;
+                tanzimRevenue += amount;
                 break;
               case "ProvisionNegative":
-                totalProvisionNegative += amount;
+                tanzimDeduction += amount;
                 break;
               case "ManualRefund":
                 totalManualRefunds += amount;
@@ -287,48 +305,69 @@ export class FinansService {
               orderNumber: item.orderNumber || "",
               paymentOrderId: item.paymentOrderId || null,
               transactionType: type,
+              categoryName:
+                type === "Sale"
+                  ? "Satış"
+                  : type === "Return"
+                  ? "İade Kesintisi"
+                  : type === "ProvisionPositive"
+                  ? "Tanzim / Provizyon (+)"
+                  : type === "ProvisionNegative"
+                  ? "Tanzim / Provizyon (-)"
+                  : type === "Discount"
+                  ? "İndirim"
+                  : item.description || type,
               source: "settlement",
               amount,
-              debt: item.debt || 0,
-              credit: item.credit || 0,
-              commissionAmount: item.commissionAmount || 0,
-              commissionRate: item.commissionRate || 0,
-              sellerRevenue: item.sellerRevenue || 0,
-              storeId: item.storeId || item.sellerId || "",
-              storeName: item.storeName || "",
+              debt,
+              credit,
+              commissionAmount: comm,
+              commissionRate: rate,
+              commissionRateFormatted: `%${rate.toFixed(2)}`, // İki ondalık basamak standardı (Bölüm 5)
+              sellerRevenue: rev,
+              storeId,
+              storeName,
               transactionDate: item.transactionDate || Date.now(),
               description: item.description || type,
             });
           }
         }
 
-        // Otherfinancials İşleme
-        let paidHakedis = 0;
-        let totalDeductions = 0;
-        let stoppage = 0;
-        let wireTransfer = 0;
-        let incomingTransfer = 0;
+        // 2. Otherfinancials İşleme (Stopaj, Kesintiler, Ödeme Emirleri)
+        let stoppageDebt = 0;       // E-ticaret Stopajı (Borç) (Bölüm 6.1)
+        let stoppageCredit = 0;     // E-ticaret Stopaj İptali (Alacak) (Bölüm 6.1)
+        let totalDeductions = 0;    // Kesinti Faturaları
+        let paidHakedis = 0;        // Ödenen Hakedişler
+        let wireTransfer = 0;       // Virman
+        let incomingTransfer = 0;   // Gelen Havale
 
         for (const [type, items] of Object.entries(otherResults)) {
           for (const item of items) {
-            const amount = Number(item.credit || item.debt || item.amount || 0);
+            const debt = Number(item.debt || 0);
+            const credit = Number(item.credit || 0);
+            const amount = credit > 0 ? credit : debt;
 
-            switch (type) {
-              case "PaymentOrder":
-                paidHakedis += amount;
-                break;
-              case "DeductionInvoices":
-                totalDeductions += amount;
-                break;
-              case "Stoppage":
-                stoppage += amount;
-                break;
-              case "WireTransfer":
-                wireTransfer += amount;
-                break;
-              case "IncomingTransfer":
-                incomingTransfer += amount;
-                break;
+            let catName = type;
+            if (type === "Stoppage") {
+              if (debt > 0) {
+                stoppageDebt += debt;
+                catName = "E-ticaret Stopajı";
+              } else {
+                stoppageCredit += credit;
+                catName = "E-ticaret Stopaj İptali";
+              }
+            } else if (type === "DeductionInvoices") {
+              totalDeductions += amount;
+              catName = "Kesinti Faturası";
+            } else if (type === "PaymentOrder") {
+              paidHakedis += amount;
+              catName = "Hakediş Ödemesi";
+            } else if (type === "WireTransfer") {
+              wireTransfer += amount;
+              catName = "Virman";
+            } else if (type === "IncomingTransfer") {
+              incomingTransfer += amount;
+              catName = "Gelen Havale";
             }
 
             allTransactions.push({
@@ -336,42 +375,45 @@ export class FinansService {
               orderNumber: item.orderNumber || "",
               paymentOrderId: item.paymentOrderId || item.receiptId || null,
               transactionType: type,
+              categoryName: catName,
               source: "otherfinancials",
               amount,
-              debt: item.debt || 0,
-              credit: item.credit || 0,
+              debt,
+              credit,
               storeId: item.storeId || "",
+              storeName: item.storeName || "",
               transactionDate: item.transactionDate || Date.now(),
               description: item.description || type,
             });
           }
         }
 
-        // Net Cari Bakiye Formülü:
-        // (Satışlar + Kuponlar + Provizyon+ + Taşıma Ücreti + Gelen Havale + İndirim İptal)
-        // - (İadeler + İndirimler + Komisyonlar + Kesintiler + Stopaj + Provizyon- + Kısmi İadeler + Ödenen Hakedişler)
+        // ── NET CARİ BAKİYE VE HAKEDİŞ HESAPLAMALARI ──
         const creditTotal =
           totalSales +
           totalCoupons +
-          totalProvisionPositive +
+          tanzimRevenue +
           totalDeliveryFees +
           incomingTransfer +
-          totalDiscountCancels;
+          totalDiscountCancels +
+          stoppageCredit;
 
         const debtTotal =
           totalReturns +
           totalDiscounts +
           totalCommission +
           totalDeductions +
-          stoppage +
-          totalProvisionNegative +
+          stoppageDebt +
+          tanzimDeduction +
           totalManualRefunds +
           paidHakedis +
           totalCouponCancels +
           totalDeliveryFeeCancels;
 
         const currentBalance = creditTotal - debtTotal;
-        const pendingHakedis = Math.max(0, totalSellerRevenue - paidHakedis);
+        const netTanzim = tanzimRevenue - tanzimDeduction;
+        const netStopaj = stoppageDebt - stoppageCredit;
+        const pendingHakedis = Math.max(0, totalSellerRevenue - paidHakedis - netStopaj - totalDeductions);
 
         const summary = {
           totals: {
@@ -379,27 +421,31 @@ export class FinansService {
             totalReturns,
             totalDiscounts,
             totalCoupons,
-            totalProvision: totalProvisionPositive - totalProvisionNegative,
-            totalDeliveryFee: totalDeliveryFees - totalDeliveryFeeCancels,
             totalCommission,
             totalSellerRevenue,
+            // Tanzim & Provizyonlar (Bölüm 6.2)
+            tanzimRevenue,
+            tanzimDeduction,
+            netTanzim,
+            // Stopaj (Bölüm 6.1)
+            stoppageDebt,
+            stoppageCredit,
+            netStopaj,
+            // Hakediş & Kesintiler
+            totalDeductions,
             paidHakedis,
             pendingHakedis,
-            totalDeductions,
-            stoppage,
+            currentBalance,
             wireTransfer,
             incomingTransfer,
-            currentBalance,
           },
+          branchBreakdown: Object.values(branchFinancialMap),
           transactionsCount: allTransactions.length,
           transactions: allTransactions.sort((a, b) => (b.transactionDate || 0) - (a.transactionDate || 0)),
           calculatedAt: new Date().toISOString(),
           period: { startDate, endDate },
         };
 
-        // Cache TTL belirleme:
-        // Eğer endDate geçmiş bir tarihe aitse (örneğin dünden önceki bir günse) veriler değişmeyeceği için 7 gün cache'le.
-        // Eğer bugünü kapsıyorsa 10 dakika cache'le.
         const isPastPeriod = endDate < Date.now() - 24 * 60 * 60 * 1000;
         const ttlSeconds = isPastPeriod ? 7 * 24 * 60 * 60 : 600;
 

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { ServerNavbar } from "@/components/ServerNavbar";
+import { ServerFooter } from "@/components/ServerFooter";
 
 interface HealthData {
   status: string;
@@ -564,15 +565,7 @@ export default function Home() {
 
       </main>
 
-      {/* Footer */}
-      <footer className="w-full border-t border-slate-200 bg-white py-4 px-4 sm:px-8 mt-12 text-xs text-slate-500 flex flex-wrap items-center justify-between gap-4 font-normal">
-        <div>
-          <strong>Limon Central Server</strong> · Sürüm 1.0.0
-        </div>
-        <div>
-          Mimari: Node.js (Next.js App Router) + Redis Engine + SSE Broadcaster + Prisma ORM (PostgreSQL)
-        </div>
-      </footer>
+      <ServerFooter />
     </div>
   );
 }

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import ServerNavbar from "@/components/ServerNavbar";
+import { ServerFooter } from "@/components/ServerFooter";
 import { BuildingComplex, Server, Shield, Users } from "lucide-react";
 
 interface SystemData {
@@ -1090,14 +1091,7 @@ export default function SettingsPage() {
         )}
       </main>
 
-      <footer className="w-full border-t border-slate-200 bg-white py-4 mt-12 text-xs text-slate-500">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between">
-          <div>
-            <strong>Limon Central Server</strong> • Sistem Kaynakları & Veritabanı Yönetimi
-          </div>
-          <div>Limon Systems Admin Console</div>
-        </div>
-      </footer>
+      <ServerFooter />
     </div>
   );
 }

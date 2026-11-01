@@ -23,8 +23,9 @@ export async function GET(request: Request) {
     const supplierId = process.env.TRENDYOL_GO_SUPPLIER_ID;
     const agentName = process.env.TRENDYOL_GO_AGENTNAME;
     const executorUser = process.env.TRENDYOL_GO_EXECUTOR_USER;
+    const token = process.env.TRENDYOL_TOKEN;
 
-    if (!supplierId || !agentName || !executorUser || !process.env.TRENDYOL_TOKEN) {
+    if (!supplierId || !agentName || !executorUser || !token) {
       return NextResponse.json(
         { success: false, error: "Trendyol GO API kimlik bilgileri eksik." },
         { status: 500 }
@@ -32,73 +33,75 @@ export async function GET(request: Request) {
     }
 
     const headers = {
-      Authorization: `Basic ${process.env.TRENDYOL_TOKEN}`,
+      Authorization: `Basic ${token}`,
       "x-agentname": agentName,
       "x-executor-user": executorUser,
     };
 
     const branchList = Object.entries(BRANCHES).map(([id, name]) => ({ id, name }));
+    const productMap = new Map<string, any>();
 
-    // Tüm şubelerden stok ve fiyatları çek
-    let allProducts: any[] = [];
-    let page = 0;
-    const totalPages = 5;
-
-    while (page < totalPages) {
+    // Şubelerden paralel ürün & fiyat çekimi (İlk 100 ürün üzerinden katalog taraması)
+    const storePromises = branchList.map(async (branch) => {
       try {
-        const response = await axios.get(
-          `https://api.tgoapis.com/integrator/product/grocery/suppliers/${supplierId}/stocks`,
+        const res = await axios.get(
+          `https://api.tgoapis.com/integrator/product/grocery/suppliers/${supplierId}/stores/${branch.id}/products`,
           {
             headers,
             params: {
-              page,
               size: 100,
+              page: 0,
             },
-            timeout: 15000,
+            timeout: 12000,
           }
         );
-
-        const content = response.data?.content || [];
-        if (!content.length) break;
-        allProducts.push(...content);
-        page++;
+        return {
+          storeId: branch.id,
+          storeName: branch.name,
+          products: res.data?.content || [],
+        };
       } catch (err: any) {
-        console.error(`[FiyatUyuşmazlık] Sayfa ${page} çekme hatası:`, err.message);
-        break;
+        console.warn(`[FiyatUyuşmazlık] Şube ${branch.id} (${branch.name}) çekilemedi:`, err.message);
+        return {
+          storeId: branch.id,
+          storeName: branch.name,
+          products: [],
+        };
       }
-    }
+    });
 
-    // Ürünleri barkod bazında birleştir ve şube fiyatlarını haritalandır
-    const productMap = new Map<string, any>();
+    const storeResults = await Promise.all(storePromises);
 
-    for (const p of allProducts) {
-      const barcode = (p.barcode || "").trim();
-      if (!barcode) continue;
+    for (const storeData of storeResults) {
+      const storeId = storeData.storeId;
+      for (const p of storeData.products) {
+        const barcode = (p.barcode || "").trim();
+        if (!barcode) continue;
 
-      if (!productMap.has(barcode)) {
-        productMap.set(barcode, {
-          id: p.id || barcode,
-          barcode,
-          title: p.title || p.productName || "İsimsiz Ürün",
-          brand: p.brand || null,
-          category: p.categoryName || p.category || null,
-          imageUrl: p.images?.[0]?.url || p.imageUrl || null,
-          totalStock: 0,
-          stocksByBranch: {} as Record<string, { price: number | null; quantity: number | null; onSale: boolean }>,
-        });
+        if (!productMap.has(barcode)) {
+          productMap.set(barcode, {
+            id: p.id || barcode,
+            barcode,
+            title: p.title || p.description || "İsimsiz Ürün",
+            brand: p.brand?.name || (typeof p.brand === "string" ? p.brand : null),
+            category: p.category?.name || (typeof p.category === "string" ? p.category : null),
+            imageUrl: p.images?.[0]?.url || p.imageUrl || null,
+            totalStock: 0,
+            stocksByBranch: {} as Record<string, { price: number | null; quantity: number | null; onSale: boolean }>,
+          });
+        }
+
+        const entry = productMap.get(barcode)!;
+        const price = typeof p.sellingPrice === "number" && p.sellingPrice > 0 ? p.sellingPrice : null;
+        const qty = typeof p.quantity === "number" ? p.quantity : 0;
+
+        entry.stocksByBranch[storeId] = {
+          price,
+          quantity: qty,
+          onSale: p.onSale ?? false,
+        };
+        entry.totalStock += qty;
       }
-
-      const entry = productMap.get(barcode)!;
-      const storeId = String(p.storeId || p.sellerId || "");
-      const price = typeof p.salePrice === "number" && p.salePrice > 0 ? p.salePrice : null;
-      const qty = typeof p.quantity === "number" ? p.quantity : 0;
-
-      entry.stocksByBranch[storeId] = {
-        price,
-        quantity: qty,
-        onSale: p.onSale ?? false,
-      };
-      entry.totalStock += qty;
     }
 
     // Uyuşmazlık Analiz Motoru
@@ -111,7 +114,10 @@ export async function GET(request: Request) {
       const validPrices: number[] = [];
       let undefinedCount = 0;
 
-      const branchPrices: Record<string, { price: number | null; quantity: number | null; onSale: boolean; isMin: boolean; isMax: boolean }> = {};
+      const branchPrices: Record<
+        string,
+        { price: number | null; quantity: number | null; onSale: boolean; isMin: boolean; isMax: boolean }
+      > = {};
 
       for (const branch of branchList) {
         const stockInfo = p.stocksByBranch[branch.id];
@@ -146,7 +152,7 @@ export async function GET(request: Request) {
         if (diffPercent >= 20) highRiskCount++;
         if (undefinedCount > 0) missingPriceCount++;
 
-        // Min / Max şubeleri işaretle
+        // Min ve Max şubeleri işaretle
         for (const branch of branchList) {
           const bp = branchPrices[branch.id];
           if (bp && bp.price !== null) {

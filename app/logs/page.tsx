@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, Fragment } from "react";
 import { ServerNavbar } from "@/components/ServerNavbar";
+import { ServerFooter } from "@/components/ServerFooter";
 import { Check, Copy } from "lucide-react";
 
 function formatIp(rawIp: string | null | undefined): string {
@@ -413,6 +414,8 @@ export default function LogsPage() {
         </section>
 
       </main>
+
+      <ServerFooter />
     </div>
   );
 }
