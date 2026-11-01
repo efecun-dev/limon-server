@@ -221,13 +221,23 @@ export async function fetchDynamicLevelData(refresh: boolean = false): Promise<D
           const reasonType = p.cancelInfo?.reasonType || "";
           const causedBy = p.cancelInfo?.causedBy || "";
 
+          // Kurye / Taşıma iptalleri KESİNLİKLE satıcı iptali sayılmaz:
+          const isCarrierCancel =
+            agent === "Carrier" ||
+            causedBy === "Carrier" ||
+            reasonType === "Carrier" ||
+            reason.includes("kurye") ||
+            reason.includes("taşıyıcı") ||
+            reason.includes("carrier");
+
           // Sadece doğrudan satıcı kaynaklı iptalleri say:
           const isSellerCancel =
-            agent === "Seller" ||
-            causedBy === "Seller" ||
-            reasonType === "Seller" ||
-            (agent !== "Customer" && agent !== "TGO App" && agent !== "Carrier" &&
-              (reason.includes("satıcı") || reason.includes("mağaza kapalı")));
+            !isCarrierCancel &&
+            (agent === "Seller" ||
+              causedBy === "Seller" ||
+              reasonType === "Seller" ||
+              (agent !== "Customer" && agent !== "TGO App" &&
+                (reason.includes("satıcı") || reason.includes("mağaza kapalı"))));
           if (isSellerCancel) sellerCancelCount++;
         }
       });

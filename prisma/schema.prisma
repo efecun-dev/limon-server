@@ -119,3 +119,20 @@ model Order {
   @@index([source])
   @@map("orders")
 }
+
+
+model OrderNote {
+  id          String   @id @default(cuid())
+  orderId     String   // packageId veya orderNumber
+  orderNumber String?  // Çift yönlü sorgulama için sipariş no
+  authorName  String   // Notu ekleyen kullanıcı adı
+  authorId    String?  // Kullanıcı ID (opsiyonel)
+  note        String   // Not içeriği
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([orderId])
+  @@index([orderNumber])
+  @@index([createdAt])
+  @@map("order_notes")
+}
