@@ -29,6 +29,11 @@ export async function GET(request: Request) {
   const refreshParam = searchParams.get("refresh") === "true";
   const cleanOrderNumber = orderNumber ? orderNumber.trim().replace(/^#/, "") : "";
 
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const calculatedStartDate = startDateParam || (fetchDays > 0 ? (fetchDays === 1 ? startOfToday.getTime() : Date.now() - fetchDays * 24 * 60 * 60 * 1000) : null);
+  const querySize = fetchDays > 0 && !searchParams.get("size") ? 1000 : sizeParam;
+
   // 1. Doğrudan Veritabanı Sorgusu İstenmişse (source=db)
   if (sourceParam === "db") {
     try {
@@ -36,10 +41,10 @@ export async function GET(request: Request) {
         orderNumber: cleanOrderNumber,
         storeId: storeIdParam,
         status: statusParam,
-        startDate: startDateParam || (fetchDays > 0 ? Date.now() - fetchDays * 24 * 60 * 60 * 1000 : null),
+        startDate: calculatedStartDate,
         endDate: endDateParam,
         page: pageParam,
-        size: sizeParam,
+        size: querySize,
         all: allParam,
         sortKey: sortKeyParam,
         sortDir: sortDirParam,
@@ -61,10 +66,10 @@ export async function GET(request: Request) {
       const cacheKey = cleanOrderNumber
         ? `orders:${supplierId}:q:${cleanOrderNumber}:store:${storeIdParam || "all"}:st:${statusParam || "all"}:p:${pageParam}:s:${sizeParam}:sk:${sortKeyParam || "date"}:${sortDirParam}`
         : allParam
-        ? `orders:${supplierId}:all:store:${storeIdParam || "all"}:st:${statusParam || "all"}:sd:${startDateParam || 0}:ed:${endDateParam || 0}`
-        : fetchDays > 0
-        ? `orders:${supplierId}:days:${fetchDays}:store:${storeIdParam || "all"}:st:${statusParam || "all"}`
-        : `orders:${supplierId}:p:${pageParam}:s:${sizeParam}:store:${storeIdParam || "all"}:st:${statusParam || "all"}:sd:${startDateParam || 0}:ed:${endDateParam || 0}:sk:${sortKeyParam || "date"}:${sortDirParam}`;
+          ? `orders:${supplierId}:all:store:${storeIdParam || "all"}:st:${statusParam || "all"}:sd:${startDateParam || 0}:ed:${endDateParam || 0}`
+          : fetchDays > 0
+            ? `orders:${supplierId}:days:${fetchDays}:store:${storeIdParam || "all"}:st:${statusParam || "all"}`
+            : `orders:${supplierId}:p:${pageParam}:s:${sizeParam}:store:${storeIdParam || "all"}:st:${statusParam || "all"}:sd:${startDateParam || 0}:ed:${endDateParam || 0}:sk:${sortKeyParam || "date"}:${sortDirParam}`;
 
       if (!refreshParam) {
         const cachedData = await redis.get(cacheKey).catch(() => null);
@@ -115,7 +120,7 @@ export async function GET(request: Request) {
             const deltaItems: any[] = deltaRes.data?.content || [];
             if (deltaItems.length > 0) {
               deltaItems.forEach((pkg: any) => map.set(String(pkg.id || pkg.orderNumber), pkg));
-              OrderStorage.upsertPackages(deltaItems, "trendyol_delta").catch(() => {});
+              OrderStorage.upsertPackages(deltaItems, "trendyol_delta").catch(() => { });
             }
           } catch (e: any) {
             console.warn("[Siparisler] Canlı delta sorgusu hatası:", e.message);
@@ -155,7 +160,7 @@ export async function GET(request: Request) {
 
           filteredContent = filteredContent.filter((pkg: any) => pkg.orderDate >= ninetyDaysAgo);
           if (filteredContent.length > 0) {
-            OrderStorage.upsertPackages(filteredContent, "trendyol_initial_sync").catch(() => {});
+            OrderStorage.upsertPackages(filteredContent, "trendyol_initial_sync").catch(() => { });
           }
         }
 
@@ -186,20 +191,21 @@ export async function GET(request: Request) {
           .then((r) => {
             const livePkgs = r.data?.content || [];
             if (livePkgs.length > 0) {
-              OrderStorage.upsertPackages(livePkgs, "trendyol_live_delta").catch(() => {});
+              OrderStorage.upsertPackages(livePkgs, "trendyol_live_delta").catch(() => { });
             }
           })
-          .catch(() => {});
+          .catch(() => { });
       }
 
       const dbResult = await OrderStorage.queryOrders({
         orderNumber: cleanOrderNumber,
         storeId: storeIdParam,
         status: statusParam,
-        startDate: startDateParam || (fetchDays > 0 ? Date.now() - fetchDays * 24 * 60 * 60 * 1000 : null),
+        startDate: calculatedStartDate,
         endDate: endDateParam,
         page: pageParam,
-        size: sizeParam,
+        size: querySize,
+        all: allParam,
         sortKey: sortKeyParam,
         sortDir: sortDirParam,
       });
@@ -231,7 +237,7 @@ export async function GET(request: Request) {
           all: allParam,
         });
         return NextResponse.json({ ...fallback, executorUser: "supabase_fallback" });
-      } catch {}
+      } catch { }
 
       return NextResponse.json({ error: "Gerçek siparişler çekilirken bir hata oluştu." }, { status: 500 });
     }
