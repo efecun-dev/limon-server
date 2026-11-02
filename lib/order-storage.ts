@@ -289,12 +289,14 @@ export class OrderStorage {
     page?: number;
     size?: number;
     all?: boolean;
+    sortKey?: string | null;
+    sortDir?: "asc" | "desc" | null;
   }) {
-    const where: any = {};
+    const baseWhere: any = {};
 
     if (params.orderNumber && params.orderNumber.trim()) {
       const q = params.orderNumber.trim().replace(/^#/, "");
-      where.OR = [
+      baseWhere.OR = [
         { orderNumber: { contains: q, mode: "insensitive" } },
         { packageNumber: { contains: q, mode: "insensitive" } },
         { customerName: { contains: q, mode: "insensitive" } },
@@ -303,29 +305,79 @@ export class OrderStorage {
     }
 
     if (params.storeId && params.storeId !== "all") {
-      where.storeId = String(params.storeId);
-    }
-
-    if (params.status && params.status !== "all") {
-      where.packageStatus = params.status;
+      const storeIds = params.storeId
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (storeIds.length === 1) {
+        baseWhere.storeId = storeIds[0];
+      } else if (storeIds.length > 1) {
+        baseWhere.storeId = { in: storeIds };
+      }
     }
 
     if (params.startDate || params.endDate) {
-      where.orderDate = {};
-      if (params.startDate) where.orderDate.gte = new Date(params.startDate);
-      if (params.endDate) where.orderDate.lte = new Date(params.endDate);
+      baseWhere.orderDate = {};
+      if (params.startDate) baseWhere.orderDate.gte = new Date(params.startDate);
+      if (params.endDate) baseWhere.orderDate.lte = new Date(params.endDate);
     }
 
-    const totalElements = await db.order.count({ where });
+    const where: any = { ...baseWhere };
+
+    if (params.status && params.status !== "all") {
+      if (params.status === "Cancelled") {
+        where.packageStatus = { in: ["Cancelled", "UnSupplied"] };
+      } else {
+        where.packageStatus = params.status;
+      }
+    }
+
+    let orderBy: any = { orderDate: "desc" };
+    if (params.sortKey) {
+      const dir = params.sortDir === "asc" ? "asc" : "desc";
+      if (params.sortKey === "orderDate") orderBy = { orderDate: dir };
+      else if (params.sortKey === "totalPrice") orderBy = { totalPrice: dir };
+      else if (params.sortKey === "customer" || params.sortKey === "customerName") orderBy = { customerName: dir };
+      else if (params.sortKey === "storeId") orderBy = { storeId: dir };
+      else if (params.sortKey === "status" || params.sortKey === "packageStatus") orderBy = { packageStatus: dir };
+    }
+
+    const [totalElements, statusGroups, baseTotal] = await Promise.all([
+      db.order.count({ where }),
+      db.order.groupBy({
+        by: ["packageStatus"],
+        where: baseWhere,
+        _count: { id: true },
+      }).catch(() => []),
+      db.order.count({ where: baseWhere }).catch(() => 0),
+    ]);
+
+    const tabCounts: Record<string, number> = {
+      all: baseTotal,
+      Created: 0,
+      Picking: 0,
+      Invoiced: 0,
+      Shipped: 0,
+      Delivered: 0,
+      Cancelled: 0,
+      UnSupplied: 0,
+    };
+    if (Array.isArray(statusGroups)) {
+      for (const g of statusGroups) {
+        if (g?.packageStatus) {
+          tabCounts[g.packageStatus] = g._count?.id || 0;
+        }
+      }
+    }
 
     let records: any[] = [];
-    const size = params.all ? Math.min(totalElements, 50000) : (params.size || 50);
+    const size = params.all ? Math.min(totalElements, 50000) : (params.size || 25);
     const page = params.page || 0;
 
     if (totalElements > 0) {
       records = await db.order.findMany({
         where,
-        orderBy: { orderDate: "desc" },
+        orderBy,
         skip: params.all ? 0 : page * size,
         take: size,
       });
@@ -340,6 +392,7 @@ export class OrderStorage {
       totalPages,
       page,
       size,
+      tabCounts,
     };
   }
 }
