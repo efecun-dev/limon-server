@@ -342,30 +342,38 @@ export class OrderStorage {
       else if (params.sortKey === "status" || params.sortKey === "packageStatus") orderBy = { packageStatus: dir };
     }
 
+    const needTabCounts = !params.page || params.page === 0;
     const [totalElements, statusGroups, baseTotal] = await Promise.all([
       db.order.count({ where }),
-      db.order.groupBy({
-        by: ["packageStatus"],
-        where: baseWhere,
-        _count: { id: true },
-      }).catch(() => []),
-      db.order.count({ where: baseWhere }).catch(() => 0),
+      needTabCounts
+        ? db.order.groupBy({
+            by: ["packageStatus"],
+            where: baseWhere,
+            _count: { id: true },
+          }).catch(() => [])
+        : Promise.resolve([]),
+      needTabCounts
+        ? db.order.count({ where: baseWhere }).catch(() => 0)
+        : Promise.resolve(0),
     ]);
 
-    const tabCounts: Record<string, number> = {
-      all: baseTotal,
-      Created: 0,
-      Picking: 0,
-      Invoiced: 0,
-      Shipped: 0,
-      Delivered: 0,
-      Cancelled: 0,
-      UnSupplied: 0,
-    };
-    if (Array.isArray(statusGroups)) {
-      for (const g of statusGroups) {
-        if (g?.packageStatus) {
-          tabCounts[g.packageStatus] = g._count?.id || 0;
+    let tabCounts: Record<string, number> | undefined = undefined;
+    if (needTabCounts) {
+      tabCounts = {
+        all: baseTotal,
+        Created: 0,
+        Picking: 0,
+        Invoiced: 0,
+        Shipped: 0,
+        Delivered: 0,
+        Cancelled: 0,
+        UnSupplied: 0,
+      };
+      if (Array.isArray(statusGroups)) {
+        for (const g of statusGroups) {
+          if (g?.packageStatus) {
+            tabCounts[g.packageStatus] = g._count?.id || 0;
+          }
         }
       }
     }

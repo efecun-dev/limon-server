@@ -220,7 +220,7 @@ export async function GET(request: Request) {
         executorUser,
       };
 
-      const ttl = fetchDays === 1 ? 45 : 60;
+      const ttl = pageParam > 0 ? 180 : (fetchDays === 1 ? 45 : 60);
       await redis.set(cacheKey, JSON.stringify(responseData), "EX", ttl).catch(() => null);
 
       return NextResponse.json(responseData);
