@@ -9,6 +9,7 @@ let isTableChecked = false;
 async function ensureOrderNotesTable() {
   if (isTableChecked) return;
   try {
+    // 1. Tabloyu tekil sorgu olarak oluştur (PostgreSQL çoklu statement tek çağrıda hata vermemesi için)
     await prisma.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS "order_notes" (
         "id" TEXT NOT NULL,
@@ -21,13 +22,20 @@ async function ensureOrderNotesTable() {
         "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
         CONSTRAINT "order_notes_pkey" PRIMARY KEY ("id")
       );
-      CREATE INDEX IF NOT EXISTS "order_notes_orderId_idx" ON "order_notes"("orderId");
-      CREATE INDEX IF NOT EXISTS "order_notes_orderNumber_idx" ON "order_notes"("orderNumber");
-      CREATE INDEX IF NOT EXISTS "order_notes_createdAt_idx" ON "order_notes"("createdAt");
     `);
+    
+    // 2. İndeksleri ayrı ayrı oluştur
+    try {
+      await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "order_notes_orderId_idx" ON "order_notes"("orderId");`);
+      await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "order_notes_orderNumber_idx" ON "order_notes"("orderNumber");`);
+      await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "order_notes_createdAt_idx" ON "order_notes"("createdAt");`);
+    } catch (idxErr: any) {
+      console.warn("[OrderNotes] Index oluşturma uyarısı:", idxErr.message);
+    }
+
     isTableChecked = true;
   } catch (err: any) {
-    console.warn("[OrderNotes] ensureOrderNotesTable uyarısı:", err.message);
+    console.error("[OrderNotes] ensureOrderNotesTable hatası:", err.message);
   }
 }
 

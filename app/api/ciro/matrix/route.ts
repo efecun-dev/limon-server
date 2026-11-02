@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import axios from "axios";
 import { redis } from "@/lib/redis";
 import { BRANCHES } from "@/lib/branches";
+import { OrderStorage } from "@/lib/order-storage";
 
 export const dynamic = "force-dynamic";
 
@@ -24,8 +25,10 @@ interface BranchData {
 function classifyCancellation(order: any): { source: "TRENDYOL" | "STORE" | "CUSTOMER"; reason: string } {
   const reason = (
     order.cancelInfo?.reason ||
+    order.cancelInfo?.reasonType ||
     order.cancellationReason ||
     order.cancellationNote ||
+    order.cancelReason ||
     ""
   ).toLowerCase();
 
@@ -40,6 +43,9 @@ function classifyCancellation(order: any): { source: "TRENDYOL" | "STORE" | "CUS
     "kapasite aşıldı",
     "kurye gecikmesi",
     "tgo",
+    "hava muhalefeti",
+    "kurye kazası",
+    "ulaşılamadı",
   ];
 
   const storeKeywords = ["stok", "ürün yok", "tedarik", "mağaza kapalı", "mağaza iptal", "hazırlanamadı"];
@@ -66,7 +72,7 @@ export async function GET(request: Request) {
     const refresh = searchParams.get("refresh") === "true";
     const cacheKey = `ciro_matrix_server_${period}`;
 
-    // 1. Önbellek Denetimi (Redis)
+    // 1. Önbellek Denetimi (Redis - 15ms yanıt süresi)
     if (!refresh) {
       try {
         const cached = await redis.get(cacheKey);
@@ -125,14 +131,62 @@ export async function GET(request: Request) {
       });
     }
 
-    // 3. Sipariş Verilerini Limon Server Önbelleğinden / API'den Al
+    const startOfMonth = new Date(year, month, 1).getTime();
+    const endOfMonth = new Date(year, month + 1, 0, 23, 59, 59, 999).getTime();
+
+    // 3. Sipariş Verilerini Al (Redis -> Supabase -> Canlı Trendyol)
     let allOrders: any[] = [];
     try {
-      const ordersCache = await redis.get("orders_full_35days");
+      const ordersCache = await redis.get("orders_full_35days") || await redis.get("orders:all");
       if (ordersCache) {
         allOrders = JSON.parse(ordersCache);
       }
     } catch (e) {}
+
+    // Redis boşsa veya bu döneme ait veri yoksa Supabase'den çek
+    if (allOrders.length === 0) {
+      try {
+        const dbRes = await OrderStorage.queryOrders({
+          startDate: startOfMonth,
+          endDate: endOfMonth,
+          all: true,
+        });
+        if (dbRes?.content && dbRes.content.length > 0) {
+          allOrders = dbRes.content;
+        }
+      } catch (dbErr: any) {
+        console.warn("[CiroMatrix] Supabase okuma hatası:", dbErr.message);
+      }
+    }
+
+    // Hala boşsa ve mevcut aysa, Trendyol API'sinden hızlıca canlı veriyi çek
+    const supplierId = process.env.TRENDYOL_GO_SUPPLIER_ID;
+    const agentName = process.env.TRENDYOL_GO_AGENTNAME;
+    const executorUser = process.env.TRENDYOL_GO_EXECUTOR_USER;
+
+    if (allOrders.length === 0 && supplierId && agentName && executorUser) {
+      try {
+        const tgoRes = await axios.get(
+          `https://api.tgoapis.com/integrator/order/grocery/suppliers/${supplierId}/packages`,
+          {
+            headers: {
+              Authorization: `Basic ${process.env.TRENDYOL_TOKEN}`,
+              "x-agentname": agentName,
+              "x-executor-user": executorUser,
+            },
+            params: { size: 200, page: 0 },
+            timeout: 10000,
+          }
+        );
+        const fetched = tgoRes.data?.content || [];
+        if (fetched.length > 0) {
+          allOrders = fetched;
+          OrderStorage.upsertPackages(fetched, "trendyol_matrix_fallback").catch(() => {});
+        }
+      } catch (apiErr: any) {
+        console.warn("[CiroMatrix] Trendyol API fallback hatası:", apiErr.message);
+      }
+    }
 
     // 4. Şube Matrisi Veri Yapısı
     const branchMap: Record<string, BranchData> = {};

@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import axios from "axios";
 import { redis } from "@/lib/redis";
+import { prisma as db } from "@/lib/prisma";
+import { OrderStorage } from "@/lib/order-storage";
 
 export const dynamic = "force-dynamic";
 
@@ -55,49 +57,69 @@ export async function GET(request: Request) {
         page++;
       }
 
-      // Her iade için bağlı olduğu paketi paralel olarak bul ve storeId + orderDetails ekle
-      const uniqueOrders = new Map<string, { orderNumber: string; orderDate: number; packageId: number }>();
-      for (const c of allContent) {
-        if (c.orderNumber && !uniqueOrders.has(c.orderNumber)) {
-          uniqueOrders.set(c.orderNumber, {
-            orderNumber: c.orderNumber,
-            orderDate: c.orderDate,
-            packageId: c.orderShipmentPackageId,
-          });
-        }
-      }
+      // Her iade için bağlı olduğu paketi önce veritabanından, gerekirse Trendyol'dan bul
+      const uniqueOrderNumbers = Array.from(new Set(allContent.map((c: any) => c.orderNumber).filter(Boolean)));
+      const uniquePackageIds = Array.from(new Set(allContent.map((c: any) => String(c.orderShipmentPackageId)).filter(Boolean)));
 
       const orderPackageMap: Record<string, any> = {};
-      await Promise.all(
-        Array.from(uniqueOrders.values()).map(async ({ orderNumber, orderDate, packageId }) => {
-          try {
-            const res = await axios.get(
-              `https://api.tgoapis.com/integrator/order/grocery/suppliers/${supplierId}/packages`,
-              {
-                headers: {
-                  "Authorization": `Basic ${process.env.TRENDYOL_TOKEN}`,
-                  "x-agentname": agentName,
-                  "x-executor-user": executorUser,
-                },
-                params: {
-                  startDate: orderDate - 3600000,
-                  endDate: orderDate + 3600000,
-                  size: 50,
-                },
+
+      try {
+        const dbRecords = await db.order.findMany({
+          where: {
+            OR: [
+              { orderNumber: { in: uniqueOrderNumbers } },
+              { id: { in: uniquePackageIds } }
+            ]
+          }
+        });
+        for (const rec of dbRecords) {
+          const pkg = OrderStorage.orderRecordToPackage(rec);
+          if (pkg.orderNumber) orderPackageMap[pkg.orderNumber] = pkg;
+          if (pkg.id) orderPackageMap[String(pkg.id)] = pkg;
+        }
+      } catch (dbErr: any) {
+        console.warn("[Claims] DB lookup hatası:", dbErr.message);
+      }
+
+      // Veritabanında henüz bulunamayan siparişler için Trendyol API fallback
+      const missingOrders = allContent.filter((c: any) => !orderPackageMap[c.orderNumber] && !orderPackageMap[String(c.orderShipmentPackageId)]);
+      if (missingOrders.length > 0) {
+        await Promise.all(
+          missingOrders.slice(0, 10).map(async (c: any) => {
+            const rawDate = c.orderDate || c.claimDate || Date.now();
+            const orderDateMs = typeof rawDate === "number" ? rawDate : new Date(rawDate).getTime();
+            try {
+              const res = await axios.get(
+                `https://api.tgoapis.com/integrator/order/grocery/suppliers/${supplierId}/packages`,
+                {
+                  headers: {
+                    "Authorization": `Basic ${process.env.TRENDYOL_TOKEN}`,
+                    "x-agentname": agentName,
+                    "x-executor-user": executorUser,
+                  },
+                  params: {
+                    startDate: orderDateMs - 86400000,
+                    endDate: orderDateMs + 86400000,
+                    size: 50,
+                  },
+                }
+              );
+              const pkg = res.data?.content?.find((p: any) => p.orderNumber === c.orderNumber || p.id === c.orderShipmentPackageId);
+              if (pkg) {
+                orderPackageMap[c.orderNumber] = pkg;
+                if (pkg.id) orderPackageMap[String(pkg.id)] = pkg;
+                // Veritabanına kaydet (Arka planda)
+                OrderStorage.upsertPackages([pkg]).catch(() => null);
               }
-            );
-            const pkg = res.data?.content?.find((p: any) => p.orderNumber === orderNumber || p.id === packageId);
-            if (pkg) {
-              orderPackageMap[orderNumber] = pkg;
-            }
-          } catch {}
-        })
-      );
+            } catch {}
+          })
+        );
+      }
 
       for (const c of allContent) {
-        const pkg = orderPackageMap[c.orderNumber];
-        c.storeId = pkg?.storeId || null;
-        c.orderDetails = pkg || null;
+        const pkg = orderPackageMap[c.orderNumber] || orderPackageMap[String(c.orderShipmentPackageId)];
+        c.storeId = pkg?.storeId || c.storeId || null;
+        c.orderDetails = pkg || c.orderDetails || null;
       }
 
       const responseData = {

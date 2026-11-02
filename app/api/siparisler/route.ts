@@ -27,7 +27,7 @@ export async function GET(request: Request) {
   const refreshParam = searchParams.get("refresh") === "true";
   const cleanOrderNumber = orderNumber ? orderNumber.trim().replace(/^#/, "") : "";
 
-  // 1. Doğrudan Veritabanı Sorgusu İstenmişse (source=db veya all=true ve Trendyol atlanmak isteniyorsa)
+  // 1. Doğrudan Veritabanı Sorgusu İstenmişse (source=db)
   if (sourceParam === "db") {
     try {
       const dbResult = await OrderStorage.queryOrders({
@@ -50,10 +50,10 @@ export async function GET(request: Request) {
     }
   }
 
-  // 2. Canlı Trendyol Entegrasyonu ve Hibrit Supabase Birleştirmesi
+  // 2. Canlı Trendyol Entegrasyonu ve Akıllı Artımlı (Incremental) Supabase Senkronizasyonu
   if (supplierId && agentName && executorUser) {
     try {
-      // Önbellek Anahtarı (all, fetchDays ve sayfalamayı kesin olarak ayırır)
+      // Önbellek Anahtarı
       const cacheKey = cleanOrderNumber
         ? `orders:${supplierId}:${cleanOrderNumber}:store:${storeIdParam || "all"}:status:${statusParam || "all"}`
         : allParam
@@ -61,7 +61,7 @@ export async function GET(request: Request) {
         : fetchDays > 0
         ? `orders:${supplierId}:days:${fetchDays}:store:${storeIdParam || "all"}:status:${statusParam || "all"}`
         : `orders:${supplierId}:p:${pageParam}:s:${sizeParam}:store:${storeIdParam || "all"}:status:${statusParam || "all"}`;
-      
+
       if (!refreshParam) {
         const cachedData = await redis.get(cacheKey).catch(() => null);
         if (cachedData) {
@@ -75,115 +75,116 @@ export async function GET(request: Request) {
       let totalPages = 1;
       let totalElements = 0;
 
-      if (fetchDays > 0 || allParam) {
-        const effectiveDays = allParam ? 3650 : fetchDays; // all ise 10 yıllık havuz
-        const cutoffDate = Date.now() - effectiveDays * 24 * 60 * 60 * 1000;
-        const headers = {
-          Authorization: `Basic ${process.env.TRENDYOL_TOKEN}`,
-          "x-agentname": agentName,
-          "x-executor-user": executorUser,
-        };
+      const headers = {
+        Authorization: `Basic ${process.env.TRENDYOL_TOKEN}`,
+        "x-agentname": agentName,
+        "x-executor-user": executorUser,
+      };
 
-        // a. Trendyol'dan son 30-35 günün canlı paketlerini optimize paralel çek
-        // İlk sayfayı çekip toplam sayfa adedini öğrenelim
-        const firstRes = await axios.get(
-          `https://api.tgoapis.com/integrator/order/grocery/suppliers/${supplierId}/packages`,
-          {
-            headers,
-            params: { size: 200, page: 0 },
-            timeout: 12000,
+      if (allParam) {
+        // ── AKILLI TÜM HAVUZ ÇEKME: Önce Supabase'den al (50ms), sadece bugünün deltasını Trendyol'dan besle ──
+        const ninetyDaysAgo = Date.now() - 90 * 24 * 60 * 60 * 1000;
+        let dbResult: any = { content: [] };
+        try {
+          dbResult = await OrderStorage.queryOrders({
+            storeId: storeIdParam,
+            status: statusParam,
+            startDate: startDateParam || ninetyDaysAgo,
+            endDate: endDateParam,
+            all: true,
+          });
+        } catch (dbErr: any) {
+          console.warn("[Siparisler] Supabase allParam sorgusu:", dbErr.message);
+        }
+
+        const map = new Map<string, any>();
+        if (dbResult.content && dbResult.content.length > 0) {
+          // Supabase'de geçmiş siparişler var -> Trendyol'a 10 sayfa sorgu ATMA! Sadece canlı ilk sayfayı çek.
+          dbResult.content.forEach((pkg: any) => map.set(String(pkg.id || pkg.orderNumber), pkg));
+
+          // Canlı delta sorgusu (Son 24 saat veya en yeni 200 sipariş - 200ms)
+          try {
+            const deltaRes = await axios.get(
+              `https://api.tgoapis.com/integrator/order/grocery/suppliers/${supplierId}/packages`,
+              {
+                headers,
+                params: { size: 200, page: 0 },
+                timeout: 8000,
+              }
+            );
+            const deltaItems: any[] = deltaRes.data?.content || [];
+            if (deltaItems.length > 0) {
+              deltaItems.forEach((pkg: any) => map.set(String(pkg.id || pkg.orderNumber), pkg));
+              OrderStorage.upsertPackages(deltaItems, "trendyol_delta").catch(() => {});
+            }
+          } catch (e: any) {
+            console.warn("[Siparisler] Canlı delta sorgusu hatası:", e.message);
           }
-        );
 
-        const page0Content: any[] = firstRes.data?.content || [];
-        filteredContent.push(...page0Content);
-        totalPages = firstRes.data?.totalPages || 1;
+          filteredContent = Array.from(map.values()).sort((a, b) => (b.orderDate || 0) - (a.orderDate || 0));
+        } else {
+          // Supabase tamamen boş -> İlk kurulum için Trendyol'dan son 90 günü paralel çek ve Supabase'e kalıcı kaydet
+          const firstRes = await axios.get(
+            `https://api.tgoapis.com/integrator/order/grocery/suppliers/${supplierId}/packages`,
+            {
+              headers,
+              params: { size: 200, page: 0 },
+              timeout: 12000,
+            }
+          );
+          const p0 = firstRes.data?.content || [];
+          filteredContent.push(...p0);
+          const tPages = Math.min(firstRes.data?.totalPages || 1, 15); // Maksimum 15 sayfa (3.000 sipariş)
 
-        // Kalan sayfaları 4'erli paketler halinde PARALEL sorgula (15 sn yerine ~1.5 sn)
-        if (totalPages > 1) {
-          const remainingPages = Array.from({ length: totalPages - 1 }, (_, i) => i + 1);
-          const chunkSize = 4;
-          let reachedCutoff = false;
-
-          const lastItemP0 = page0Content[page0Content.length - 1];
-          if (lastItemP0 && lastItemP0.orderDate < cutoffDate) {
-            reachedCutoff = true;
-          }
-
-          for (let i = 0; i < remainingPages.length && !reachedCutoff; i += chunkSize) {
-            const chunk = remainingPages.slice(i, i + chunkSize);
+          if (tPages > 1) {
+            const pagesToFetch = Array.from({ length: tPages - 1 }, (_, i) => i + 1);
             const chunkResults = await Promise.all(
-              chunk.map((p) =>
+              pagesToFetch.map((p) =>
                 axios
-                  .get(
-                    `https://api.tgoapis.com/integrator/order/grocery/suppliers/${supplierId}/packages`,
-                    {
-                      headers,
-                      params: { size: 200, page: p },
-                      timeout: 12000,
-                    }
-                  )
-                  .then((r) => r.data?.content || [])
-                  .catch((e) => {
-                    console.warn(`[Siparisler] Paket sayfa ${p} hatası:`, e.message);
-                    return [];
+                  .get(`https://api.tgoapis.com/integrator/order/grocery/suppliers/${supplierId}/packages`, {
+                    headers,
+                    params: { size: 200, page: p },
+                    timeout: 10000,
                   })
+                  .then((r) => r.data?.content || [])
+                  .catch(() => [])
               )
             );
-
-            for (const items of chunkResults) {
-              filteredContent.push(...items);
-              const last = items[items.length - 1];
-              if (last && last.orderDate < cutoffDate) {
-                reachedCutoff = true;
-              }
-            }
+            for (const items of chunkResults) filteredContent.push(...items);
           }
-        }
 
-        // Sadece istenen süre içindeki siparişleri tut
-        filteredContent = filteredContent.filter((pkg: any) => pkg.orderDate >= cutoffDate);
-
-        // b. Çekilen canlı paketleri Supabase'e kaydet (Arka planda kalıcı hale getir)
-        if (filteredContent.length > 0) {
-          OrderStorage.upsertPackages(filteredContent, "trendyol_api").catch((err) => {
-            console.warn("[Siparisler] Supabase arka plan upsert hatası:", err.message);
-          });
-        }
-
-        // c. Trendyol'un 35 günlük penceresinden daha eski sipariş isteniyorsa Supabase'den tamamla
-        const thirtyFiveDaysAgo = Date.now() - 35 * 24 * 60 * 60 * 1000;
-        if (cutoffDate < thirtyFiveDaysAgo || allParam) {
-          try {
-            const dbOlderOrders = await OrderStorage.queryOrders({
-              storeId: storeIdParam,
-              status: statusParam,
-              startDate: cutoffDate,
-              endDate: thirtyFiveDaysAgo,
-              all: true,
-            });
-
-            if (dbOlderOrders.content && dbOlderOrders.content.length > 0) {
-              const seenIds = new Set(filteredContent.map((p) => String(p.id || p.orderNumber)));
-              for (const oldPkg of dbOlderOrders.content) {
-                const id = String(oldPkg.id || oldPkg.orderNumber);
-                if (!seenIds.has(id)) {
-                  seenIds.add(id);
-                  filteredContent.push(oldPkg);
-                }
-              }
-              // Tarihe göre yeniden sırala (en yeniden en eskiye)
-              filteredContent.sort((a, b) => (b.orderDate || 0) - (a.orderDate || 0));
-            }
-          } catch (dbErr: any) {
-            console.warn("[Siparisler] Supabase tamamlayıcı okuma hatası:", dbErr.message);
+          filteredContent = filteredContent.filter((pkg: any) => pkg.orderDate >= ninetyDaysAgo);
+          if (filteredContent.length > 0) {
+            OrderStorage.upsertPackages(filteredContent, "trendyol_initial_sync").catch(() => {});
           }
         }
 
         totalElements = filteredContent.length;
         totalPages = 1;
+      } else if (fetchDays > 0) {
+        // ── GÜNLÜK DELTA / fetchDays: Sadece gerekli gün penceresini çek ──
+        const cutoffDate = Date.now() - fetchDays * 24 * 60 * 60 * 1000;
+        
+        // Eğer sadece 1 gün (Bugün) isteniyorsa sadece sayfa 0'ı çekip dön (Süper Hızlı: 200ms)
+        const firstRes = await axios.get(
+          `https://api.tgoapis.com/integrator/order/grocery/suppliers/${supplierId}/packages`,
+          {
+            headers,
+            params: { size: 200, page: 0 },
+            timeout: 8000,
+          }
+        );
+        const p0 = firstRes.data?.content || [];
+        filteredContent = p0.filter((pkg: any) => pkg.orderDate >= cutoffDate);
+
+        if (filteredContent.length > 0) {
+          OrderStorage.upsertPackages(filteredContent, "trendyol_today").catch(() => {});
+        }
+
+        totalElements = filteredContent.length;
+        totalPages = 1;
       } else if (cleanOrderNumber) {
-        // Tek sipariş araması: Önce Supabase'e bak
+        // Tek sipariş araması: Önce Supabase'e bak (5ms)
         try {
           const dbSearch = await OrderStorage.queryOrders({ orderNumber: cleanOrderNumber, all: true });
           if (dbSearch.content && dbSearch.content.length > 0) {
@@ -193,7 +194,7 @@ export async function GET(request: Request) {
           }
         } catch {}
 
-        // Eğer Supabase'de yoksa Trendyol API'sinde ara
+        // Supabase'de yoksa Trendyol API'sinde ara
         if (filteredContent.length === 0) {
           const checkMatch = (pkg: any) => {
             if (storeIdParam && storeIdParam !== "all" && pkg.storeId?.toString() !== storeIdParam) return false;
@@ -223,11 +224,7 @@ export async function GET(request: Request) {
           const res0 = await axios.get(
             `https://api.tgoapis.com/integrator/order/grocery/suppliers/${supplierId}/packages`,
             {
-              headers: {
-                Authorization: `Basic ${process.env.TRENDYOL_TOKEN}`,
-                "x-agentname": agentName,
-                "x-executor-user": executorUser,
-              },
+              headers,
               params: scanParams,
             }
           );
@@ -253,11 +250,7 @@ export async function GET(request: Request) {
         const response = await axios.get(
           `https://api.tgoapis.com/integrator/order/grocery/suppliers/${supplierId}/packages`,
           {
-            headers: {
-              Authorization: `Basic ${process.env.TRENDYOL_TOKEN}`,
-              "x-agentname": agentName,
-              "x-executor-user": executorUser,
-            },
+            headers,
             params: queryParams,
           }
         );
@@ -266,7 +259,6 @@ export async function GET(request: Request) {
         totalPages = response.data?.totalPages || 1;
         totalElements = response.data?.totalElements || filteredContent.length;
 
-        // Arka planda Supabase'e yaz
         if (filteredContent.length > 0) {
           OrderStorage.upsertPackages(filteredContent, "trendyol_page").catch(() => {});
         }
@@ -280,14 +272,14 @@ export async function GET(request: Request) {
         executorUser,
       };
 
-      // all=true için 10 dakika (600s), anlık bugün (fetchDays=1) için 45s, normal için 180s Redis önbelleği
+      // all=true için 600s, anlık bugün (fetchDays=1) için 45s, normal için 180s Redis önbelleği
       const ttl = allParam ? 600 : fetchDays === 1 ? 45 : 180;
       await redis.set(cacheKey, JSON.stringify(responseData), "EX", ttl).catch(() => null);
 
       return NextResponse.json(responseData);
     } catch (error: any) {
       console.error("Trendyol Sipariş Çekme Hatası:", error?.response?.data || error.message);
-      
+
       // Trendyol API hatası alsa bile Supabase'den kurtar
       try {
         const fallback = await OrderStorage.queryOrders({
