@@ -379,7 +379,7 @@ export class OrderStorage {
     }
 
     let records: any[] = [];
-    const size = params.all ? Math.min(totalElements, 50000) : (params.size || 25);
+    const size = params.all ? Math.min(totalElements, 50000) : (params.size || 50);
     const page = params.page || 0;
 
     if (totalElements > 0) {
