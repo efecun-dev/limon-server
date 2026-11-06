@@ -24,7 +24,7 @@ export async function GET(request: Request) {
   const executorUser = process.env.TRENDYOL_GO_EXECUTOR_USER;
 
   const pageParam = parseInt(searchParams.get("page") || "0", 10);
-  const sizeParam = parseInt(searchParams.get("size") || "50", 10);
+  const sizeParam = parseInt(searchParams.get("size") || "100", 10);
   const fetchDays = parseInt(searchParams.get("fetchDays") || "0", 10);
   const refreshParam = searchParams.get("refresh") === "true";
   const cleanOrderNumber = orderNumber ? orderNumber.trim().replace(/^#/, "") : "";
